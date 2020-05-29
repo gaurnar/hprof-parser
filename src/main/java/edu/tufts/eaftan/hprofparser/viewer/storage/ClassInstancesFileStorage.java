@@ -11,9 +11,6 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
-/**
- * TODO something simpler?
- */
 public class ClassInstancesFileStorage {
 
     private static final int INSTANCES_PER_SEGMENT = 100;
@@ -30,8 +27,6 @@ public class ClassInstancesFileStorage {
     }
 
     public void registerInstance(long classId, long instanceFileOffset) throws IOException {
-        // TODO remove copy-paste
-
         if (finished) {
             throw new RuntimeException("already finished registering");
         }
@@ -85,79 +80,85 @@ public class ClassInstancesFileStorage {
 
         InstancesOffsets offsets = offsetsByClassIdMap.get(classId);
 
-        List<Long> instancesOffsets = new ArrayList<>(limit);
+        int segmentsToSkip = offset / INSTANCES_PER_SEGMENT;
 
-        int remainingOffset = offset;
-        int remainingInstances = limit;
-
-        file.seek(offsets.firstSegmentOffset);
-
-        long newOffset;
-        int numInstances;
-
-        // traversing segments to apply offset
-        while (true) {
-            newOffset = file.readLong();
-            numInstances = file.readInt();
-
-            if (numInstances <= remainingOffset) {
-                if (newOffset == 0) {
-                    // no instances at all
-                    return Collections.emptyList();
-                } else {
-                    remainingOffset -= numInstances;
-                    file.seek(newOffset);
-                }
-            } else {
-                file.skipBytes(remainingOffset * 8);
-                break;
-            }
+        if (segmentsToSkip >= offsets.segmentsOffsets.size()) {
+            return Collections.emptyList();
         }
 
-        // traversing segments to fetch instances
-        while (true) {
-            int instancesToRead = Math.min(remainingInstances, numInstances);
-            for (int i = 0; i < instancesToRead; i++) {
+        int offsetInFirstSegment = offset - segmentsToSkip * INSTANCES_PER_SEGMENT;
+
+        List<Long> instancesOffsets = new ArrayList<>(limit);
+
+        //
+        // reading from first segment
+        //
+
+        file.seek(offsets.segmentsOffsets.get(segmentsToSkip));
+        file.skipBytes(offsetInFirstSegment * 8);
+
+        int instancesToReadFirstSegment;
+
+        if (offsets.segmentsOffsets.size() == 1) {
+            // special case - first segment is also the last one; which may be not full
+            // TODO can we refactor to avoid this?
+            instancesToReadFirstSegment = Math.min(limit, offsets.lastFileSegmentInstancesCount);
+        } else {
+            instancesToReadFirstSegment = Math.min(limit, INSTANCES_PER_SEGMENT - offsetInFirstSegment);
+        }
+
+        for (int j = 0; j < instancesToReadFirstSegment; j++) {
+            instancesOffsets.add(file.readLong());
+        }
+
+        //
+        // reading from other segments except last one
+        //
+
+        int remainingInstances = limit - instancesToReadFirstSegment;
+
+        for (int i = segmentsToSkip + 1; i < (offsets.segmentsOffsets.size() - 1) && remainingInstances != 0; i++) {
+            file.seek(offsets.segmentsOffsets.get(i));
+
+            int instancesToRead = Math.min(remainingInstances, INSTANCES_PER_SEGMENT);
+
+            for (int j = 0; j < instancesToRead; j++) {
                 instancesOffsets.add(file.readLong());
             }
 
             remainingInstances -= instancesToRead;
+        }
 
-            if (remainingInstances == 0 || newOffset == 0) {
-                break;
+        //
+        // reading from last segment
+        //
+
+        if (offsets.segmentsOffsets.size() > 1) {
+            file.seek(offsets.segmentsOffsets.get(offsets.segmentsOffsets.size() - 1));
+
+            int instancesToReadLastSegment = Math.min(remainingInstances, offsets.lastFileSegmentInstancesCount);
+
+            for (int j = 0; j < instancesToReadLastSegment; j++) {
+                instancesOffsets.add(file.readLong());
             }
-
-            file.seek(newOffset);
-            newOffset = file.readLong();
-            numInstances = file.readInt();
         }
 
         return instancesOffsets;
     }
 
     private void writeSegmentToFile(InstancesOffsets offsets) throws IOException {
-        if (offsets.lastSegmentOffset == -1) {
-            offsets.firstSegmentOffset = file.length();
-        } else {
-            file.seek(offsets.lastSegmentOffset);
-            file.writeLong(file.length());
-        }
+        offsets.lastFileSegmentInstancesCount = INSTANCES_PER_SEGMENT - offsets.inMemorySegmentBuffer.remaining();
+        offsets.segmentsOffsets.add(file.length());
 
-        offsets.lastSegmentOffset = file.length();
-
-        // writing new segment
-        // TODO these writes are slow!
         file.seek(file.length());
-        file.writeLong(0); // no next segment
-        file.writeInt(INSTANCES_PER_SEGMENT - offsets.inMemorySegmentBuffer.remaining());
         file.write(offsets.inMemorySegmentByteBuffer.array());
 
         offsets.inMemorySegmentBuffer.clear();
     }
 
     private static class InstancesOffsets {
-        long firstSegmentOffset = -1;
-        long lastSegmentOffset = -1;
+        List<Long> segmentsOffsets = new ArrayList<>();
+        int lastFileSegmentInstancesCount = -1;
 
         ByteBuffer inMemorySegmentByteBuffer = ByteBuffer.allocate(INSTANCES_PER_SEGMENT * 8);
         LongBuffer inMemorySegmentBuffer = inMemorySegmentByteBuffer.asLongBuffer();
