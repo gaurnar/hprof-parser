@@ -1,9 +1,9 @@
 package edu.tufts.eaftan.hprofparser.viewer;
 
-import edu.tufts.eaftan.hprofparser.handler.InstanceDumpFileOffsetAwareRecordHandler;
 import edu.tufts.eaftan.hprofparser.handler.NullRecordHandler;
 import edu.tufts.eaftan.hprofparser.handler.RecordHandler;
 import edu.tufts.eaftan.hprofparser.parser.HprofParser;
+import edu.tufts.eaftan.hprofparser.parser.HprofParser.ParseOptions;
 import edu.tufts.eaftan.hprofparser.parser.datastructures.Constant;
 import edu.tufts.eaftan.hprofparser.parser.datastructures.InstanceField;
 import edu.tufts.eaftan.hprofparser.parser.datastructures.Static;
@@ -97,9 +97,10 @@ public class HprofViewer {
     public HprofViewer(File hprofFile) throws IOException {
         this.hprofFile = hprofFile;
 
-        parser = new HprofParser(new MainRecordHandler());
+        parser = new HprofParser();
 
-        parser.parse(hprofFile);
+        parser.parse(hprofFile, new MainRecordHandler(),
+                     new ParseOptions(true, true, true));
 
         classInstancesStorage.finishRegistering();
         instancesOffsetStorage.finishRegistering();
@@ -109,7 +110,7 @@ public class HprofViewer {
             // TODO some other way to filter?
             .filter(heapDumpClass -> heapDumpClass.count > 0
                 && heapDumpClass.name != null) // TODO why can it be null?
-//            .sorted(Comparator.comparing(heapDumpClass -> heapDumpClass.name))
+//            .sorted(Comparator.comparing(heapDumpClass -> heapDumpClass.name)) // TODO sorting
             .map(classProcessingInfo -> {
                 List<String> fieldNames = new ArrayList<>();
 
@@ -161,7 +162,7 @@ public class HprofViewer {
 
         try {
             // TODO read previews?
-            parser.readInstanceDumpAtOffset(hprofFile, fileOffset, fieldRecordHandler);
+            parser.readInstanceDumpAtOffset(fileOffset, fieldRecordHandler);
         } catch (IOException e) {
             throw new RuntimeException(e);
         }
@@ -169,7 +170,7 @@ public class HprofViewer {
         return new HeapDumpClassInstance(fieldPreviews);
     }
 
-    private class MainRecordHandler extends NullRecordHandler implements InstanceDumpFileOffsetAwareRecordHandler {
+    private class MainRecordHandler extends NullRecordHandler {
 
         @Override
         public void classDump(long classObjId, int stackTraceSerialNum, long superClassObjId, long classLoaderObjId,
@@ -215,8 +216,7 @@ public class HprofViewer {
         }
 
         @Override
-        public void instanceDumpAtOffset(long objId, int stackTraceSerialNum, long classObjId,
-                                         Value<?>[] instanceFieldValues, long fileOffset) {
+        public void instanceDumpAtOffset(long objId, int stackTraceSerialNum, long classObjId, long fileOffset) {
             classInfoByClassObjIdMap.putIfAbsent(classObjId, new ClassProcessingInfo(classObjId));
 
             classInfoByClassObjIdMap.get(classObjId).count++;
@@ -230,14 +230,12 @@ public class HprofViewer {
         }
 
         @Override
-        public void objArrayDumpAtOffset(long objId, int stackTraceSerialNum, long elemClassObjId, long[] elems,
-                                         long fileOffset) {
+        public void objArrayDumpAtOffset(long objId, int stackTraceSerialNum, long elemClassObjId, long fileOffset) {
             // TODO
         }
 
         @Override
-        public void primArrayDumpAtOffset(long objId, int stackTraceSerialNum, byte elemType, Value<?>[] elems,
-                                          long fileOffset) {
+        public void primArrayDumpAtOffset(long objId, int stackTraceSerialNum, byte elemType, long fileOffset) {
             // TODO
         }
     }

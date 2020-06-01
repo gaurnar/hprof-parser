@@ -19,26 +19,26 @@ import edu.tufts.eaftan.hprofparser.parser.datastructures.Value;
  */
 public interface RecordHandler {
 
-  public abstract void header(String format, int idSize, long time);
+  void header(String format, int idSize, long time);
 
-  public abstract void stringInUTF8(long id, String data);
+  void stringInUTF8(long id, String data);
 
-  public abstract void loadClass(int classSerialNum, long classObjId, int stackTraceSerialNum,
+  void loadClass(int classSerialNum, long classObjId, int stackTraceSerialNum,
       long classNameStringId);
 
-  public abstract void unloadClass(int classSerialNum);
+  void unloadClass(int classSerialNum);
 
-  public abstract void stackFrame(long stackFrameId,
+  void stackFrame(long stackFrameId,
       long methodNameStringId,
       long methodSigStringId,
       long sourceFileNameStringId,
       int classSerialNum,
       int location);
 
-  public abstract void stackTrace(int stackTraceSerialNum, int threadSerialNum, int numFrames,
+  void stackTrace(int stackTraceSerialNum, int threadSerialNum, int numFrames,
       long[] stackFrameIds);
 
-  public abstract void allocSites(short bitMaskFlags,
+  void allocSites(short bitMaskFlags,
       float cutoffRatio,
       int totalLiveBytes,
       int totalLiveInstances,
@@ -46,47 +46,47 @@ public interface RecordHandler {
       long totalInstancesAllocated,
       AllocSite[] sites);
 
-  public abstract void heapSummary(int totalLiveBytes, int totalLiveInstances,
+  void heapSummary(int totalLiveBytes, int totalLiveInstances,
       long totalBytesAllocated, long totalInstancesAllocated);
 
-  public abstract void startThread(int threadSerialNum,
+  void startThread(int threadSerialNum,
       long threadObjectId,
       int stackTraceSerialNum,
       long threadNameStringId,
       long threadGroupNameId,
       long threadParentGroupNameId);
 
-  public abstract void endThread(int threadSerialNum);
+  void endThread(int threadSerialNum);
 
-  public abstract void heapDump();
+  void heapDump();
 
-  public abstract void heapDumpEnd();
+  void heapDumpEnd();
 
-  public abstract void heapDumpSegment();
+  void heapDumpSegment();
 
-  public abstract void cpuSamples(int totalNumOfSamples, CPUSample[] samples);
+  void cpuSamples(int totalNumOfSamples, CPUSample[] samples);
 
-  public abstract void controlSettings(int bitMaskFlags, short stackTraceDepth);
+  void controlSettings(int bitMaskFlags, short stackTraceDepth);
 
-  public abstract void rootUnknown(long objId);
+  void rootUnknown(long objId);
 
-  public abstract void rootJNIGlobal(long objId, long JNIGlobalRefId);
+  void rootJNIGlobal(long objId, long JNIGlobalRefId);
 
-  public abstract void rootJNILocal(long objId, int threadSerialNum, int frameNum);
+  void rootJNILocal(long objId, int threadSerialNum, int frameNum);
 
-  public abstract void rootJavaFrame(long objId, int threadSerialNum, int frameNum);
+  void rootJavaFrame(long objId, int threadSerialNum, int frameNum);
 
-  public abstract void rootNativeStack(long objId, int threadSerialNum);
+  void rootNativeStack(long objId, int threadSerialNum);
 
-  public abstract void rootStickyClass(long objId);
+  void rootStickyClass(long objId);
 
-  public abstract void rootThreadBlock(long objId, int threadSerialNum);
+  void rootThreadBlock(long objId, int threadSerialNum);
 
-  public abstract void rootMonitorUsed(long objId);
+  void rootMonitorUsed(long objId);
 
-  public abstract void rootThreadObj(long objId, int threadSerialNum, int stackTraceSerialNum);
+  void rootThreadObj(long objId, int threadSerialNum, int stackTraceSerialNum);
 
-  public abstract void classDump(long classObjId,
+  void classDump(long classObjId,
       int stackTraceSerialNum,
       long superClassObjId,
       long classLoaderObjId,
@@ -99,15 +99,18 @@ public interface RecordHandler {
       Static[] statics,
       InstanceField[] instanceFields);
 
-  public abstract void instanceDump(long objId, int stackTraceSerialNum, long classObjId,
-      Value<?>[] instanceFieldValues);
+  void instanceDump(long objId, int stackTraceSerialNum, long classObjId, Value<?>[] instanceFieldValues);
 
-  public abstract void objArrayDump(long objId, int stackTraceSerialNum, long elemClassObjId,
-      long[] elems);
+  void instanceDumpAtOffset(long objId, int stackTraceSerialNum, long classObjId, long fileOffset);
 
-  public abstract void primArrayDump(long objId, int stackTraceSerialNum, byte elemType,
-      Value<?>[] elems);
+  void objArrayDump(long objId, int stackTraceSerialNum, long elemClassObjId, long[] elems);
 
-  public abstract void finished();
+  void objArrayDumpAtOffset(long objId, int stackTraceSerialNum, long elemClassObjId, long fileOffset);
+
+  void primArrayDump(long objId, int stackTraceSerialNum, byte elemType, Value<?>[] elems);
+
+  void primArrayDumpAtOffset(long objId, int stackTraceSerialNum, byte elemType, long fileOffset);
+
+  void finished();
 
 }
