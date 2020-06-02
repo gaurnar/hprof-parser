@@ -267,11 +267,18 @@ public class HprofParser {
         // String in UTF-8
         l1 = readId(in);
         bytesLeft -= idSize;
-        bArr1 = new byte[(int) bytesLeft];
-        in.readFully(bArr1);
-//        if (isFirstPass) { // TODO allow to configure properly?
+
+        if (isFirstPass) {
+          in.skipBytes((int) bytesLeft);
+        } else {
+          // handling strings only on second pass is useful for handling only
+          // strings that we are interested in (e.g. class and field names)
+          bArr1 = new byte[(int) bytesLeft];
+          in.readFully(bArr1);
+
           handler.stringInUTF8(l1, new String(bArr1));
-//        }
+        }
+
         break;
 
       case 0x2:

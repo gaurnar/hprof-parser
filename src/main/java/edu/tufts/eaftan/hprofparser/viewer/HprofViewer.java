@@ -177,6 +177,9 @@ public class HprofViewer {
                               long signersObjId, long protectionDomainObjId, long reserved1, long reserved2,
                               int instanceSize, Constant[] constants, Static[] statics,
                               InstanceField[] instanceFields) {
+            // TODO handle constants and statics
+            // TODO record size
+
             classInfoByClassObjIdMap.putIfAbsent(classObjId, new ClassProcessingInfo(classObjId));
 
             ClassProcessingInfo classInfo = classInfoByClassObjIdMap.get(classObjId);
@@ -200,6 +203,7 @@ public class HprofViewer {
 
         @Override
         public void stringInUTF8(long id, String data) {
+            // we are called strictly after all classes loads/dumps
             if (classInfoByNameIdMap.containsKey(id)) {
                 classInfoByNameIdMap.get(id).forEach(info -> info.name = data);
             } else if (classFieldInfoByNameIdMap.containsKey(id)) {
