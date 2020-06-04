@@ -29,12 +29,14 @@ import edu.tufts.eaftan.hprofparser.parser.datastructures.Type;
 import edu.tufts.eaftan.hprofparser.parser.datastructures.Value;
 import java.io.BufferedInputStream;
 import java.io.ByteArrayInputStream;
+import java.io.Closeable;
 import java.io.DataInput;
 import java.io.DataInputStream;
 import java.io.EOFException;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.IOException;
+import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.HashMap;
 
@@ -120,8 +122,8 @@ public class HprofParser {
 
     currentFileOffset = 0;
 
-    FileInputStream fs = new FileInputStream(file);
-    DataInput in = new PositionTrackingDataInputProxy(new DataInputStream(new BufferedInputStream(fs)));
+    GlobalPositionTrackingByteBufferDataInput in = new GlobalPositionTrackingByteBufferDataInput();
+    in.start();
 
     // header
     String format = readUntilNull(in);
@@ -134,7 +136,7 @@ public class HprofParser {
     do {
       done = parseRecord(in, true, options);
     } while (!done);
-    fs.close();
+    in.close();
 
     /*
      * Second pass
@@ -142,8 +144,8 @@ public class HprofParser {
 
     currentFileOffset = 0;
 
-    FileInputStream fsSecond = new FileInputStream(file);
-    DataInput inSecond = new PositionTrackingDataInputProxy(new DataInputStream(new BufferedInputStream(fsSecond)));
+    GlobalPositionTrackingByteBufferDataInput inSecond = new GlobalPositionTrackingByteBufferDataInput();
+    inSecond.start();
 
     readUntilNull(inSecond); // format
     inSecond.readInt(); // idSize
@@ -151,7 +153,7 @@ public class HprofParser {
     do {
       done = parseRecord(inSecond, false, options);
     } while (!done);
-    fsSecond.close();
+    inSecond.close();
     handler.finished();
 
     parsed = true;
@@ -1012,100 +1014,159 @@ public class HprofParser {
     return id;
   }
 
-  // TODO can it be done easier?
-  private class PositionTrackingDataInputProxy implements DataInput {
+  private class GlobalPositionTrackingByteBufferDataInput implements DataInput, Closeable {
 
-    private final DataInput target;
+    // TODO calibrate size even more?
+    private static final int BUFFER_SIZE = 1024 * 1024; // 1 Mb
 
-    private PositionTrackingDataInputProxy(DataInput target) {
-      this.target = target;
+    private final FileInputStream fileInputStream;
+    private final ByteBuffer buffer;
+
+    private GlobalPositionTrackingByteBufferDataInput() throws IOException {
+      fileInputStream = new FileInputStream(file);
+      buffer = ByteBuffer.allocateDirect(BUFFER_SIZE);
+    }
+
+    public void start() throws IOException {
+      fillWholeBuffer();
     }
 
     @Override
     public void readFully(byte[] b) throws IOException {
-      target.readFully(b);
-      currentFileOffset += b.length;
+      readFully(b, 0, b.length);
     }
 
     @Override
     public void readFully(byte[] b, int off, int len) throws IOException {
-      target.readFully(b, off, len);
+      int remainingBytes = len;
+      int currentOffset = off;
+
+      //
+      // reading what remains in buffer
+      //
+
+      int bufferRemainingBytesToRead = Math.min(buffer.remaining(), len);
+
+      buffer.get(b, currentOffset, bufferRemainingBytesToRead);
+
+      remainingBytes -= bufferRemainingBytesToRead;
+      currentOffset += bufferRemainingBytesToRead;
+
+      //
+      // reading whole buffers
+      //
+
+      while (remainingBytes != 0) {
+        int bytesToRead = Math.min(remainingBytes, BUFFER_SIZE);
+
+        buffer.rewind();
+
+        int bytesRead = fileInputStream.getChannel().read(buffer);
+
+        if (bytesRead < bytesToRead) {
+          throw new RuntimeException("unexpected end of file");
+        }
+
+        buffer.rewind();
+
+        buffer.get(b, currentOffset, bytesToRead);
+
+        remainingBytes -= bytesToRead;
+        currentOffset += bytesToRead;
+      }
+
       currentFileOffset += len;
     }
 
     @Override
     public int skipBytes(int n) throws IOException {
-      int bytes = target.skipBytes(n);
-      currentFileOffset += bytes;
-      return bytes;
+
+      if (n <= buffer.remaining()) {
+        buffer.position(buffer.position() + n);
+      } else {
+        int remainingBytes = n - buffer.remaining();
+
+        long currentChannelPosition = fileInputStream.getChannel().position();
+        fileInputStream.getChannel().position(currentChannelPosition + remainingBytes);
+
+        fillWholeBuffer();
+      }
+
+      // not really correct; in original interface we may skip fewer bytes (but we don't care here)
+      currentFileOffset += n;
+      return n;
     }
 
     @Override
     public boolean readBoolean() throws IOException {
-      boolean value = target.readBoolean();
+      ensureBufferHasRemaining(1);
+      byte value = buffer.get();
       currentFileOffset += 1;
-      return value;
+      return value != 0;
     }
 
     @Override
     public byte readByte() throws IOException {
-      byte value = target.readByte();
+      ensureBufferHasRemaining(1);
+      byte value = buffer.get();
       currentFileOffset += 1;
       return value;
     }
 
     @Override
-    public int readUnsignedByte() throws IOException {
-      int value = target.readUnsignedByte();
-      currentFileOffset += 1;
-      return value;
+    public int readUnsignedByte() {
+      throw new UnsupportedOperationException();
     }
 
     @Override
     public short readShort() throws IOException {
-      short value = target.readShort();
+      ensureBufferHasRemaining(2);
+      short value = buffer.getShort();
       currentFileOffset += 2;
       return value;
     }
 
     @Override
-    public int readUnsignedShort() throws IOException {
-      int value = target.readUnsignedShort();
-      currentFileOffset += 2;
-      return value;
+    public int readUnsignedShort() {
+      throw new UnsupportedOperationException();
     }
 
     @Override
     public char readChar() throws IOException {
-      char value = target.readChar();
+      ensureBufferHasRemaining(2);
+      char value = buffer.getChar();
       currentFileOffset += 2;
       return value;
     }
 
     @Override
     public int readInt() throws IOException {
-      int value = target.readInt();
+      ensureBufferHasRemaining(4);
+      int value = buffer.getInt();
       currentFileOffset += 4;
       return value;
     }
 
     @Override
     public long readLong() throws IOException {
-      long value = target.readLong();
+      ensureBufferHasRemaining(8);
+      long value = buffer.getLong();
       currentFileOffset += 8;
       return value;
     }
 
     @Override
     public float readFloat() throws IOException {
-      float value = target.readFloat();
+      ensureBufferHasRemaining(4);
+      float value = buffer.getFloat();
       currentFileOffset += 4;
       return value;
     }
 
     @Override
     public double readDouble() throws IOException {
-      double value = target.readDouble();
+      ensureBufferHasRemaining(8);
+      double value = buffer.getDouble();
       currentFileOffset += 8;
       return value;
     }
@@ -1118,6 +1179,55 @@ public class HprofParser {
     @Override
     public String readUTF() {
       throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public void close() throws IOException {
+      fileInputStream.close();
+    }
+
+    private void fillWholeBuffer() throws IOException {
+      buffer.rewind();
+
+      int bytesRead = fileInputStream.getChannel().read(buffer);
+
+      buffer.rewind();
+      buffer.limit(Math.max(0, bytesRead));
+    }
+
+    private void ensureBufferHasRemaining(int requestedSize) throws IOException {
+      if (buffer.remaining() >= requestedSize) {
+        return;
+      }
+
+      int bytesNotProcessed = buffer.remaining();
+
+      if (BUFFER_SIZE - bytesNotProcessed < requestedSize) {
+        throw new RuntimeException("requested size is too big"); // should not happen
+      }
+
+      if (bytesNotProcessed != 0) {
+        byte[] notProcessedBytes = new byte[bytesNotProcessed];
+        buffer.get(notProcessedBytes);
+
+        buffer.rewind();
+        buffer.put(notProcessedBytes);
+      } else {
+        buffer.rewind();
+      }
+
+      int bytesRead = fileInputStream.getChannel().read(buffer);
+
+      checkForEOF(bytesRead);
+
+      buffer.rewind();
+      buffer.limit(bytesNotProcessed + bytesRead);
+    }
+
+    private void checkForEOF(int bytesRead) throws EOFException {
+      if (bytesRead == -1) {
+        throw new EOFException();
+      }
     }
   }
 
