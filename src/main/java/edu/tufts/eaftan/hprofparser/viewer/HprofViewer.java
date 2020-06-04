@@ -9,11 +9,14 @@ import edu.tufts.eaftan.hprofparser.parser.datastructures.InstanceField;
 import edu.tufts.eaftan.hprofparser.parser.datastructures.Static;
 import edu.tufts.eaftan.hprofparser.parser.datastructures.Value;
 import edu.tufts.eaftan.hprofparser.viewer.storage.ClassInstancesFileStorage;
-import edu.tufts.eaftan.hprofparser.viewer.storage.InstancesOffsetExternalSortedStorage;
+import edu.tufts.eaftan.hprofparser.viewer.storage.ObjectInfoBinarySearchFileStorage;
+import edu.tufts.eaftan.hprofparser.viewer.storage.ObjectInfoBinarySearchFileStorage.ObjectInfo;
+import edu.tufts.eaftan.hprofparser.viewer.storage.ObjectInfoBinarySearchFileStorage.ObjectType;
 import java.io.File;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -58,10 +61,16 @@ public class HprofViewer {
     }
 
     public static class HeapDumpClassInstance {
+        private final long id;
         private final Map<String, String> fieldValuePreviews;
 
-        public HeapDumpClassInstance(Map<String, String> fieldValuePreviews) {
+        public HeapDumpClassInstance(long id, Map<String, String> fieldValuePreviews) {
+            this.id = id;
             this.fieldValuePreviews = fieldValuePreviews;
+        }
+
+        public long getId() {
+            return id;
         }
 
         public Map<String, String> getFieldValuePreviews() {
@@ -89,8 +98,8 @@ public class HprofViewer {
     private Map<Long, List<String>> classFieldNamesByClassObjIdMap = new HashMap<>();
 
     private final ClassInstancesFileStorage classInstancesStorage = new ClassInstancesFileStorage();
-    private final InstancesOffsetExternalSortedStorage instancesOffsetStorage =
-        new InstancesOffsetExternalSortedStorage();
+    private final ObjectInfoBinarySearchFileStorage instancesOffsetStorage =
+        new ObjectInfoBinarySearchFileStorage();
 
     private List<HeapDumpClass> classes;
 
@@ -110,7 +119,7 @@ public class HprofViewer {
             // TODO some other way to filter?
             .filter(heapDumpClass -> heapDumpClass.count > 0
                 && heapDumpClass.name != null) // TODO why can it be null?
-//            .sorted(Comparator.comparing(heapDumpClass -> heapDumpClass.name)) // TODO sorting
+            .sorted(Comparator.comparing(heapDumpClass -> heapDumpClass.count, Comparator.reverseOrder()))
             .map(classProcessingInfo -> {
                 List<String> fieldNames = new ArrayList<>();
 
@@ -143,16 +152,19 @@ public class HprofViewer {
     }
 
     public HeapDumpClassInstance showInstance(long instanceId) throws IOException {
-        return readHeapDumpClassInstance(instancesOffsetStorage.getInstanceOffset(instanceId));
+        return readHeapDumpClassInstance(instancesOffsetStorage.getObjectInfo(instanceId).getDumpFileOffset());
     }
 
     private HeapDumpClassInstance readHeapDumpClassInstance(long fileOffset) {
+        long[] id = new long[1];
         Map<String, String> fieldPreviews = new HashMap<>();
 
         RecordHandler fieldRecordHandler = new NullRecordHandler() {
             @Override
             public void instanceDump(long objId, int stackTraceSerialNum, long classObjId,
                                      Value<?>[] instanceFieldValues) {
+                id[0] = objId;
+
                 List<String> fieldNames = classFieldNamesByClassObjIdMap.get(classObjId);
                 for (int i = 0; i < fieldNames.size(); i++) {
                     fieldPreviews.put(fieldNames.get(i), instanceFieldValues[i].value.toString());
@@ -167,7 +179,7 @@ public class HprofViewer {
             throw new RuntimeException(e);
         }
 
-        return new HeapDumpClassInstance(fieldPreviews);
+        return new HeapDumpClassInstance(id[0], fieldPreviews);
     }
 
     private class MainRecordHandler extends NullRecordHandler {
@@ -227,7 +239,7 @@ public class HprofViewer {
 
             try {
                 classInstancesStorage.registerInstance(classObjId, fileOffset);
-                instancesOffsetStorage.registerInstance(objId, fileOffset);
+                instancesOffsetStorage.registerObjectInfo(new ObjectInfo(objId, fileOffset, ObjectType.INSTANCE));
             } catch (IOException e) {
                 throw new RuntimeException(e);
             }

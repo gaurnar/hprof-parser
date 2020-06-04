@@ -1,6 +1,7 @@
 package edu.tufts.eaftan.hprofparser.viewer;
 
 import edu.tufts.eaftan.hprofparser.viewer.HprofViewer.HeapDumpClass;
+import edu.tufts.eaftan.hprofparser.viewer.HprofViewer.HeapDumpClassInstance;
 import java.io.File;
 import java.util.List;
 import org.junit.Test;
@@ -26,6 +27,12 @@ public class HprofViewerTest {
         System.out.println(String.format("Loaded dump with %d classes in %.2f seconds",
                                          classes.size(), (float) (endMillis - startMillis) / 1000));
 
-        System.out.println(viewer.listClassInstances(classes.get(0).getId(), 0, 10));
+        List<HeapDumpClassInstance> instances = viewer.listClassInstances(classes.get(0).getId(), 0, 10);
+
+        HeapDumpClassInstance instance = viewer.showInstance(instances.get(0).getId());
+
+        System.out.println(String.format("Class %s has instances count: %d\nFirst instance fields: %s",
+                                         classes.get(0).getName(), classes.get(0).getInstancesCount(),
+                                         instance.getFieldValuePreviews()));
     }
 }
