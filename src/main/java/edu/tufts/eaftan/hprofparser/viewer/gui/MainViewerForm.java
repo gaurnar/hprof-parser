@@ -1,11 +1,22 @@
 package edu.tufts.eaftan.hprofparser.viewer.gui;
 
 import edu.tufts.eaftan.hprofparser.viewer.HprofViewer;
+import edu.tufts.eaftan.hprofparser.viewer.HprofViewer.HeapDumpArrayInstance;
 import edu.tufts.eaftan.hprofparser.viewer.HprofViewer.HeapDumpClass;
 import edu.tufts.eaftan.hprofparser.viewer.HprofViewer.HeapDumpClassInstance;
+import edu.tufts.eaftan.hprofparser.viewer.HprofViewer.HeapDumpClassInstanceField;
+import edu.tufts.eaftan.hprofparser.viewer.HprofViewer.HeapDumpClassInstanceObjectField;
+import edu.tufts.eaftan.hprofparser.viewer.HprofViewer.HeapDumpClassInstancePrimitiveField;
+import edu.tufts.eaftan.hprofparser.viewer.HprofViewer.HeapDumpClassObject;
+import edu.tufts.eaftan.hprofparser.viewer.HprofViewer.HeapDumpObject;
+import edu.tufts.eaftan.hprofparser.viewer.HprofViewer.HeapDumpObjectArray;
+import edu.tufts.eaftan.hprofparser.viewer.HprofViewer.HeapDumpPrimitiveArray;
+import edu.tufts.eaftan.hprofparser.viewer.HprofViewer.HeapDumpPrimitiveArrayInstance;
+import edu.tufts.eaftan.hprofparser.viewer.HprofViewer.HeapDumpType;
 import java.io.File;
 import java.util.List;
 import java.util.Map;
+import java.util.function.BiFunction;
 import java.util.stream.Collectors;
 import javax.swing.JButton;
 import javax.swing.JFileChooser;
@@ -64,12 +75,9 @@ public class MainViewerForm extends JFrame {
                 SwingUtilities.invokeLater(() -> {
                     try {
                         viewer = new HprofViewer(selectedFile);
-                        fillClassNodes();
+                        fillTypeNodes();
                     } catch (Throwable t) {
-                        JOptionPane.showMessageDialog(MainViewerForm.this,
-                                                      String.format("Failed to load dump!\n%s: %s",
-                                                                    t.getClass().getSimpleName(), t.getMessage()),
-                                                      "Error", JOptionPane.ERROR_MESSAGE);
+                        showError(t, "Failed to load dump!");
                         t.printStackTrace();
                     }
                     waitDialog.dispose();
@@ -88,8 +96,8 @@ public class MainViewerForm extends JFrame {
 
             DefaultMutableTreeNode treeNode =
                 (DefaultMutableTreeNode) e.getNewLeadSelectionPath().getLastPathComponent();
-            if (treeNode.getUserObject() instanceof InstanceNodeData) {
-                InstanceNodeData instanceData = (InstanceNodeData) treeNode.getUserObject();
+            if (treeNode.getUserObject() instanceof ClassInstanceNodeData) {
+                ClassInstanceNodeData instanceData = (ClassInstanceNodeData) treeNode.getUserObject();
 
                 List<String> fieldNames = instanceData.fieldPreviews.keySet().stream()
                     .sorted()
@@ -120,24 +128,122 @@ public class MainViewerForm extends JFrame {
 
                     DefaultMutableTreeNode parentNode = (DefaultMutableTreeNode) treeNode.getParent();
 
-                    SwingUtilities.invokeLater(() -> {
-                        try {
-                            List<HeapDumpClassInstance> instances =
-                                viewer.listClassInstances(placeholder.typeId, placeholder.offset,
-                                                          CLASS_INSTANCES_BATCH_SIZE);
+                    if (parentNode.getUserObject() instanceof TypeNodeData) {
+                        TypeNodeData typeNodeData = (TypeNodeData) parentNode.getUserObject();
 
-                            treeNode.removeFromParent();
+                        if (typeNodeData.viewerType instanceof HeapDumpClass) {
+                            HeapDumpClass heapDumpClass = (HeapDumpClass) typeNodeData.viewerType;
 
-                            addInstancesToTypeNode(placeholder.offset, instances, parentNode);
-                        } catch (Throwable t) {
-                            JOptionPane.showMessageDialog(MainViewerForm.this,
-                                                          String.format("Failed to list children!\n%s: %s",
-                                                                        t.getClass().getSimpleName(),
-                                                                        t.getMessage()),
-                                                          "Error", JOptionPane.ERROR_MESSAGE);
-                            t.printStackTrace();
+                            SwingUtilities.invokeLater(() -> {
+                                try {
+                                    List<HeapDumpClassInstance> instances =
+                                        viewer.listClassInstances(heapDumpClass.getClassId(),
+                                                                  placeholder.offset,
+                                                                  CLASS_INSTANCES_BATCH_SIZE);
+
+                                    treeNode.removeFromParent();
+
+                                    addClassInstancesToTypeNode(placeholder.offset, instances, parentNode);
+                                } catch (Throwable t) {
+                                    showError(t, "Failed to list children!");
+                                    t.printStackTrace();
+                                }
+                            });
+                        } else if (typeNodeData.viewerType instanceof HeapDumpObjectArray) {
+                            // TODO remove copy paste with above
+                            HeapDumpObjectArray objectArray = (HeapDumpObjectArray) typeNodeData.viewerType;
+
+                            SwingUtilities.invokeLater(() -> {
+                                try {
+                                    List<HeapDumpArrayInstance> instances =
+                                        viewer.listObjectArrayInstances(objectArray.getElementClassId(),
+                                                                        placeholder.offset,
+                                                                        CLASS_INSTANCES_BATCH_SIZE);
+
+                                    treeNode.removeFromParent();
+
+                                    addArrayInstancesToTypeNode(placeholder.offset, instances, parentNode);
+                                } catch (Throwable t) {
+                                    showError(t, "Failed to list children!");
+                                    t.printStackTrace();
+                                }
+                            });
+                        } else if (typeNodeData.viewerType instanceof HeapDumpPrimitiveArray) {
+                            // TODO remove copy paste with above
+                            HeapDumpPrimitiveArray primitiveArray = (HeapDumpPrimitiveArray) typeNodeData.viewerType;
+
+                            SwingUtilities.invokeLater(() -> {
+                                try {
+                                    List<HeapDumpArrayInstance> instances =
+                                        viewer.listPrimitiveArrayInstances(primitiveArray.getPrimitiveType(),
+                                                                           placeholder.offset,
+                                                                           CLASS_INSTANCES_BATCH_SIZE);
+
+                                    treeNode.removeFromParent();
+
+                                    addArrayInstancesToTypeNode(placeholder.offset, instances, parentNode);
+                                } catch (Throwable t) {
+                                    showError(t, "Failed to list children!");
+                                    t.printStackTrace();
+                                }
+                            });
                         }
-                    });
+                    } else if (parentNode.getUserObject() instanceof ArrayInstanceNodeData) {
+                        ArrayInstanceNodeData arrayInstanceNodeData =
+                            (ArrayInstanceNodeData) parentNode.getUserObject();
+
+                        if (arrayInstanceNodeData.isPrimitive) {
+                            SwingUtilities.invokeLater(() -> {
+                                try {
+                                    List<String> values = viewer.listPrimitiveArrayElements(arrayInstanceNodeData.id,
+                                                                                            placeholder.offset,
+                                                                                            CLASS_INSTANCES_BATCH_SIZE);
+
+                                    treeNode.removeFromParent();
+
+                                    // TODO remove copy paste
+                                    addLoadableObjectsToNode(placeholder.offset, values,
+                                                             (value, index) ->
+                                                                 new DefaultMutableTreeNode(
+                                                                     String.format("#%d %s", index + 1, value)),
+                                                             parentNode);
+                                } catch (Throwable t) {
+                                    showError(t, "Failed to list children!");
+                                    t.printStackTrace();
+                                }
+                            });
+                        } else {
+                            SwingUtilities.invokeLater(() -> {
+                                try {
+                                    List<HeapDumpObject> objects =
+                                        viewer.listObjectArrayElements(arrayInstanceNodeData.id, 0,
+                                                                       CLASS_INSTANCES_BATCH_SIZE);
+
+                                    treeNode.removeFromParent();
+
+                                    // TODO remove copy paste
+                                    addLoadableObjectsToNode(placeholder.offset, objects, (heapDumpObject, index) -> {
+                                        if (heapDumpObject == null) {
+                                            return new DefaultMutableTreeNode(String.format("#%d <null>", index + 1));
+                                        } else if (heapDumpObject instanceof HeapDumpClassObject) {
+                                            HeapDumpClassObject classObject = (HeapDumpClassObject) heapDumpObject;
+                                            return new DefaultMutableTreeNode(String.format(
+                                                "#%d <Class<%s>>", index + 1, classObject.getClassName()));
+                                        } else if (heapDumpObject instanceof HeapDumpClassInstance) {
+                                            return createClassInstanceTreeNode((HeapDumpClassInstance) heapDumpObject, index);
+                                        } else if (heapDumpObject instanceof HeapDumpArrayInstance) {
+                                            return createArrayTreeNode((HeapDumpArrayInstance) heapDumpObject, index);
+                                        } else {
+                                            throw new RuntimeException("unexpected object type");
+                                        }
+                                    }, parentNode);
+                                } catch (Throwable t) {
+                                    showError(t, "Failed to list children!");
+                                    t.printStackTrace();
+                                }
+                            });
+                        }
+                    }
                 }
             }
         });
@@ -154,23 +260,91 @@ public class MainViewerForm extends JFrame {
                     }
 
                     TypeNodeData typeData = (TypeNodeData) treeNode.getUserObject();
-                    SwingUtilities.invokeLater(() -> {
-                        try {
-                            List<HeapDumpClassInstance> instances =
-                                viewer.listClassInstances(typeData.typeId, 0, CLASS_INSTANCES_BATCH_SIZE);
 
-                            treeNode.removeAllChildren();
+                    if (typeData.viewerType instanceof HeapDumpClass) {
+                        SwingUtilities.invokeLater(() -> {
+                            try {
+                                List<HeapDumpClassInstance> instances =
+                                    viewer.listClassInstances(((HeapDumpClass) typeData.viewerType).getClassId(),
+                                                              0, CLASS_INSTANCES_BATCH_SIZE);
 
-                            addInstancesToTypeNode(0, instances, treeNode);
-                        } catch (Throwable t) {
-                            JOptionPane.showMessageDialog(MainViewerForm.this,
-                                                          String.format("Failed to list children!\n%s: %s",
-                                                                        t.getClass().getSimpleName(),
-                                                                        t.getMessage()),
-                                                          "Error", JOptionPane.ERROR_MESSAGE);
-                            t.printStackTrace();
-                        }
-                    });
+                                treeNode.removeAllChildren();
+
+                                addClassInstancesToTypeNode(0, instances, treeNode);
+                            } catch (Throwable t) {
+                                showError(t, "Failed to list children!");
+                                t.printStackTrace();
+                            }
+                        });
+                    } else if (typeData.viewerType instanceof HeapDumpObjectArray) {
+                        SwingUtilities.invokeLater(() -> {
+                            try {
+                                List<HeapDumpArrayInstance> instances = viewer.listObjectArrayInstances(
+                                    ((HeapDumpObjectArray) typeData.viewerType).getElementClassId(),
+                                    0, CLASS_INSTANCES_BATCH_SIZE);
+
+                                treeNode.removeAllChildren();
+
+                                addArrayInstancesToTypeNode(0, instances, treeNode);
+                            } catch (Throwable t) {
+                                showError(t, "Failed to list children!");
+                                t.printStackTrace();
+                            }
+                        });
+                    } else if (typeData.viewerType instanceof HeapDumpPrimitiveArray) {
+                        SwingUtilities.invokeLater(() -> {
+                            try {
+                                List<HeapDumpArrayInstance> instances = viewer.listPrimitiveArrayInstances(
+                                    ((HeapDumpPrimitiveArray) typeData.viewerType).getPrimitiveType(),
+                                    0, CLASS_INSTANCES_BATCH_SIZE);
+
+                                treeNode.removeAllChildren();
+
+                                addArrayInstancesToTypeNode(0, instances, treeNode);
+                            } catch (Throwable t) {
+                                showError(t, "Failed to list children!");
+                                t.printStackTrace();
+                            }
+                        });
+                    }
+                } else if (treeNode.getUserObject() instanceof ArrayInstanceNodeData) {
+                    ArrayInstanceNodeData arrayData = (ArrayInstanceNodeData) treeNode.getUserObject();
+
+                    if (arrayData.isPrimitive) {
+                        List<String> values = viewer.listPrimitiveArrayElements(arrayData.id,
+                                                                                0,
+                                                                                CLASS_INSTANCES_BATCH_SIZE);
+
+                        treeNode.removeAllChildren();
+
+                        addLoadableObjectsToNode(0, values,
+                                                 (value, index) ->
+                                                     new DefaultMutableTreeNode(
+                                                         String.format("#%d %s", index + 1, value)),
+                                                 treeNode);
+                    } else {
+                        List<HeapDumpObject> objects = viewer.listObjectArrayElements(arrayData.id,
+                                                                                        0,
+                                                                                        CLASS_INSTANCES_BATCH_SIZE);
+
+                        treeNode.removeAllChildren();
+
+                        addLoadableObjectsToNode(0, objects, (heapDumpObject, index) -> {
+                            if (heapDumpObject == null) {
+                                return new DefaultMutableTreeNode(String.format("#%d <null>", index + 1));
+                            } else if (heapDumpObject instanceof HeapDumpClassObject) {
+                                HeapDumpClassObject classObject = (HeapDumpClassObject) heapDumpObject;
+                                return new DefaultMutableTreeNode(String.format(
+                                    "#%d <Class<%s>>", index + 1, classObject.getClassName()));
+                            } else if (heapDumpObject instanceof HeapDumpClassInstance) {
+                                return createClassInstanceTreeNode((HeapDumpClassInstance) heapDumpObject, index);
+                            } else if (heapDumpObject instanceof HeapDumpArrayInstance) {
+                                return createArrayTreeNode((HeapDumpArrayInstance) heapDumpObject, index);
+                            } else {
+                                throw new RuntimeException("unexpected object type");
+                            }
+                        }, treeNode);
+                    }
                 }
             }
 
@@ -181,48 +355,86 @@ public class MainViewerForm extends JFrame {
         });
     }
 
-    private void fillClassNodes() {
+    private void showError(Throwable t, String s) {
+        JOptionPane.showMessageDialog(MainViewerForm.this,
+                                      String.format(s + "\n%s: %s", t.getClass().getSimpleName(), t.getMessage()),
+                                      "Error", JOptionPane.ERROR_MESSAGE);
+    }
+
+    private void fillTypeNodes() {
         DefaultMutableTreeNode root = new DefaultMutableTreeNode("Types");
 
         dumpTreeModel = new DefaultTreeModel(root);
 
-        viewer.listClasses().forEach(heapDumpClass -> root.add(createTypeTreeNode(heapDumpClass)));
+        viewer.listTypes().forEach(heapDumpType -> root.add(createTypeTreeNode(heapDumpType)));
 
         dumpTree.setModel(dumpTreeModel);
     }
 
-    private MutableTreeNode createTypeTreeNode(HeapDumpClass heapDumpClass) {
-        DefaultMutableTreeNode node = new DefaultMutableTreeNode(new TypeNodeData(heapDumpClass.getName(),
-                                                                                  heapDumpClass.getId(),
-                                                                                  heapDumpClass.getInstancesCount()));
+    private MutableTreeNode createTypeTreeNode(HeapDumpType heapDumpType) {
+        TypeNodeData typeNodeData = new TypeNodeData(heapDumpType);
+
+        DefaultMutableTreeNode node = new DefaultMutableTreeNode(typeNodeData);
         node.add(new DefaultMutableTreeNode("loading..."));
         return node;
     }
 
-    private MutableTreeNode createInstanceTreeNode(HeapDumpClassInstance instance, int index) {
-        DefaultMutableTreeNode node = new DefaultMutableTreeNode(new InstanceNodeData(-1, // TODO
-                                                                                      index,
-                                                                                      instance.getFieldValuePreviews()));
+    private MutableTreeNode createClassInstanceTreeNode(HeapDumpClassInstance instance, int index) {
+        Map<String, String> fieldPreviews = instance.getInstanceFields().stream()
+            .collect(Collectors.toMap(HeapDumpClassInstanceField::getFieldName, field -> {
+                if (field instanceof HeapDumpClassInstancePrimitiveField) {
+                    return ((HeapDumpClassInstancePrimitiveField) field).getValueAsString();
+                } else { // HeapDumpClassInstanceObjectField
+                    return "<" + ((HeapDumpClassInstanceObjectField) field).getTypeName() + ">";
+                }
+            }));
+
+        DefaultMutableTreeNode node = new DefaultMutableTreeNode(new ClassInstanceNodeData(instance.getId(),
+                                                                                           index,
+                                                                                           fieldPreviews));
         node.setAllowsChildren(false);
         return node;
     }
 
-    private void addInstancesToTypeNode(int offset,
-                                        List<HeapDumpClassInstance> instances,
-                                        DefaultMutableTreeNode typeNode) {
-        TypeNodeData typeData = (TypeNodeData) typeNode.getUserObject();
+    private MutableTreeNode createArrayTreeNode(HeapDumpArrayInstance instance, int index) {
+        ArrayInstanceNodeData arrayNodeData =
+            new ArrayInstanceNodeData(instance.getId(), index, instance instanceof HeapDumpPrimitiveArrayInstance);
+        DefaultMutableTreeNode node = new DefaultMutableTreeNode(arrayNodeData);
+        node.add(new DefaultMutableTreeNode("loading..."));
+        return node;
+    }
 
+    private void addClassInstancesToTypeNode(int offset,
+                                             List<HeapDumpClassInstance> instances,
+                                             DefaultMutableTreeNode typeNode) {
+        addLoadableObjectsToNode(offset, instances,
+                                 this::createClassInstanceTreeNode,
+                                 typeNode);
+    }
+
+    private void addArrayInstancesToTypeNode(int offset,
+                                             List<HeapDumpArrayInstance> instances,
+                                             DefaultMutableTreeNode typeNode) {
+        addLoadableObjectsToNode(offset, instances,
+                                 this::createArrayTreeNode,
+                                 typeNode);
+    }
+
+    private <T>
+    void addLoadableObjectsToNode(int offset, List<T> instances,
+                                  BiFunction<T, Integer, MutableTreeNode> childNodeCreatorFunction,
+                                  DefaultMutableTreeNode node) {
         for (int i = 0; i < instances.size(); i++) {
-            typeNode.add(createInstanceTreeNode(instances.get(i), offset + i));
+            node.add(childNodeCreatorFunction.apply(instances.get(i), offset + i));
         }
 
         if (instances.size() == CLASS_INSTANCES_BATCH_SIZE) {
-            typeNode.add(
-                new DefaultMutableTreeNode(new LoadMoreInstancesPlaceholder(typeData.typeId,
-                                                                            offset + CLASS_INSTANCES_BATCH_SIZE)));
+            LoadMoreInstancesPlaceholder placeholder =
+                new LoadMoreInstancesPlaceholder(offset + CLASS_INSTANCES_BATCH_SIZE);
+            node.add(new DefaultMutableTreeNode(placeholder));
         } // else we have no more instances
 
-        dumpTreeModel.reload(typeNode);
+        dumpTreeModel.reload(node);
     }
 
     private void clearObjectPropertiesTableAndShowHint() {
@@ -232,29 +444,25 @@ public class MainViewerForm extends JFrame {
     }
 
     private static class TypeNodeData {
-        final long typeId;
-        final String typeName;
-        final int instancesCount;
+        final HeapDumpType viewerType;
 
-        private TypeNodeData(String typeName, long typeId, int instancesCount) {
-            this.typeId = typeId;
-            this.typeName = typeName;
-            this.instancesCount = instancesCount;
+        private TypeNodeData(HeapDumpType viewerType) {
+            this.viewerType = viewerType;
         }
 
         @Override
         public String toString() {
-            return String.format("%s (%d)", typeName, instancesCount);
+            return String.format("%s (%d)", viewerType.getName(), viewerType.getInstancesCount());
         }
     }
 
-    private static class InstanceNodeData {
+    private static class ClassInstanceNodeData {
         final long id;
         final int index;
         final Map<String, String> fieldPreviews;
 
-        private InstanceNodeData(long id, int index,
-                                 Map<String, String> fieldPreviews) {
+        private ClassInstanceNodeData(long id, int index,
+                                      Map<String, String> fieldPreviews) {
             this.id = id;
             this.index = index;
             this.fieldPreviews = fieldPreviews;
@@ -266,18 +474,33 @@ public class MainViewerForm extends JFrame {
         }
     }
 
+    private static class ArrayInstanceNodeData {
+        final long id;
+        final int index;
+        final boolean isPrimitive;
+
+        private ArrayInstanceNodeData(long id, int index, boolean isPrimitive) {
+            this.id = id;
+            this.index = index;
+            this.isPrimitive = isPrimitive;
+        }
+
+        @Override
+        public String toString() {
+            return "#" + (index + 1);
+        }
+    }
+
     private static class LoadMoreInstancesPlaceholder {
-        final long typeId;
         final int offset;
 
-        private LoadMoreInstancesPlaceholder(long typeId, int offset) {
-            this.typeId = typeId;
+        private LoadMoreInstancesPlaceholder(int offset) {
             this.offset = offset;
         }
 
         @Override
         public String toString() {
-            return "load more instances....";
+            return "load more....";
         }
     }
 

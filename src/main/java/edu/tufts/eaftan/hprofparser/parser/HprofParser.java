@@ -84,6 +84,9 @@ public class HprofParser {
 
   private boolean parsed = false;
 
+  private int arrayOffset = 0;
+  private int arrayLimit = -1;
+
   public void parse(File file, RecordHandler handler) throws IOException {
     parse(file, handler, DEFAULT_OPTIONS);
   }
@@ -174,7 +177,7 @@ public class HprofParser {
     }
   }
 
-  public void readObjArrayDumpAtOffset(long offset, RecordHandler handler)
+  public void readObjArrayDumpAtOffset(long fileOffset, RecordHandler handler, int elementsOffset, int elementsLimit)
       throws IOException {
     // TODO remove copy paste with above?
 
@@ -182,16 +185,19 @@ public class HprofParser {
 
     this.handler = handler;
 
+    this.arrayOffset = elementsOffset;
+    this.arrayLimit = elementsLimit;
+
     try(FileInputStream fs = new FileInputStream(file)) {
-      fs.getChannel().position(offset);
+      fs.getChannel().position(fileOffset);
 
       DataInputStream in = new DataInputStream(new BufferedInputStream(fs));
 
-      processObjectArrayDump(in,false, DEFAULT_OPTIONS);
+      processObjectArrayDump(in,true, DEFAULT_OPTIONS);
     }
   }
 
-  public void readPrimArrayDumpAtOffset(long offset, RecordHandler handler)
+  public void readPrimArrayDumpAtOffset(long offset, RecordHandler handler, int elementsOffset, int elementsLimit)
       throws IOException {
     // TODO remove copy paste with above?
 
@@ -199,12 +205,15 @@ public class HprofParser {
 
     this.handler = handler;
 
+    this.arrayOffset = elementsOffset;
+    this.arrayLimit = elementsLimit;
+
     try(FileInputStream fs = new FileInputStream(file)) {
       fs.getChannel().position(offset);
 
       DataInputStream in = new DataInputStream(new BufferedInputStream(fs));
 
-      processPrimArrayDump(in,false, DEFAULT_OPTIONS);
+      processPrimArrayDump(in,true, DEFAULT_OPTIONS);
     }
   }
 
@@ -805,58 +814,73 @@ public class HprofParser {
 
     bytesRead += arrayElementsSize;
 
-    if (options.isSkipPrimArrayBodies()) {
-      if (isFirstPass) {
-        handler.primArrayDumpAtOffset(l1, i1, b1, lastDumpItemStartOffset);
-      }
+    if (!isFirstPass) {
       in.skipBytes(arrayElementsSize);
       return bytesRead;
     }
 
-    Value<?>[] vs = new Value[i2];
+    if (options.isSkipObjArrayBodies()) {
+      handler.primArrayDumpAtOffset(l1, i1, b1, lastDumpItemStartOffset);
 
-    for (int i=0; i<vs.length; i++) {
-      switch (t) {
-        case OBJ:
-          long vobj = readId(in);
-          vs[i] = new Value<>(t, vobj);
-          break;
-        case BOOL:
-          boolean vbool = in.readBoolean();
-          vs[i] = new Value<>(t, vbool);
-          break;
-        case CHAR:
-          char vc = in.readChar();
-          vs[i] = new Value<>(t, vc);
-          break;
-        case FLOAT:
-          float vf = in.readFloat();
-          vs[i] = new Value<>(t, vf);
-          break;
-        case DOUBLE:
-          double vd = in.readDouble();
-          vs[i] = new Value<>(t, vd);
-          break;
-        case BYTE:
-          byte vbyte = in.readByte();
-          vs[i] = new Value<>(t, vbyte);
-          break;
-        case SHORT:
-          short vshort = in.readShort();
-          vs[i] = new Value<>(t, vshort);
-          break;
-        case INT:
-          int vi = in.readInt();
-          vs[i] = new Value<>(t, vi);
-          break;
-        case LONG:
-          long vlong = in.readLong();
-          vs[i] = new Value<>(t, vlong);
-          break;
-      }
+      // TODO remove copy-paste?
+      in.skipBytes(arrayElementsSize);
+      return bytesRead;
     }
 
-    if (isFirstPass) {
+    if (arrayLimit == -1) {
+      arrayLimit = i2;
+    }
+
+    if (arrayOffset >= i2) {
+      handler.primArrayDump(l1, i1, b1, new Value[0]);
+    } else {
+      int elemsToRead = Math.min(i2 - arrayOffset, arrayLimit);
+
+      in.skipBytes(arrayOffset * idSize);
+
+      Value<?>[] vs = new Value[elemsToRead];
+
+      for (int i=0; i<vs.length; i++) {
+        switch (t) {
+          case OBJ:
+            long vobj = readId(in);
+            vs[i] = new Value<>(t, vobj);
+            break;
+          case BOOL:
+            boolean vbool = in.readBoolean();
+            vs[i] = new Value<>(t, vbool);
+            break;
+          case CHAR:
+            char vc = in.readChar();
+            vs[i] = new Value<>(t, vc);
+            break;
+          case FLOAT:
+            float vf = in.readFloat();
+            vs[i] = new Value<>(t, vf);
+            break;
+          case DOUBLE:
+            double vd = in.readDouble();
+            vs[i] = new Value<>(t, vd);
+            break;
+          case BYTE:
+            byte vbyte = in.readByte();
+            vs[i] = new Value<>(t, vbyte);
+            break;
+          case SHORT:
+            short vshort = in.readShort();
+            vs[i] = new Value<>(t, vshort);
+            break;
+          case INT:
+            int vi = in.readInt();
+            vs[i] = new Value<>(t, vi);
+            break;
+          case LONG:
+            long vlong = in.readLong();
+            vs[i] = new Value<>(t, vlong);
+            break;
+        }
+      }
+
       handler.primArrayDump(l1, i1, b1, vs);
     }
 
@@ -880,20 +904,35 @@ public class HprofParser {
 
     int bytesRead = (2 + i2) * idSize + 8;
 
-    if (options.isSkipObjArrayBodies()) {
-      if (isFirstPass) {
-        handler.objArrayDumpAtOffset(l1, i1, l2, lastDumpItemStartOffset);
-      }
+    if (!isFirstPass) {
       in.skipBytes(i2 * idSize);
       return bytesRead;
     }
 
-    lArr1 = new long[i2];
-    for (int i=0; i<i2; i++) {
-      lArr1[i] = readId(in);
+    if (options.isSkipObjArrayBodies()) {
+      handler.objArrayDumpAtOffset(l1, i1, l2, lastDumpItemStartOffset);
+
+      // TODO remove copy-paste?
+      in.skipBytes(i2 * idSize);
+      return bytesRead;
     }
 
-    if (isFirstPass) {
+    if (arrayLimit == -1) {
+      arrayLimit = i2;
+    }
+
+    if (arrayOffset >= i2) {
+      handler.objArrayDump(l1, i1, l2, new long[0]);
+    } else {
+      int elemsToRead = Math.min(i2 - arrayOffset, arrayLimit);
+
+      in.skipBytes(arrayOffset * idSize);
+
+      lArr1 = new long[elemsToRead];
+      for (int i = 0; i < elemsToRead; i++) {
+        lArr1[i] = readId(in);
+      }
+
       handler.objArrayDump(l1, i1, l2, lArr1);
     }
 
