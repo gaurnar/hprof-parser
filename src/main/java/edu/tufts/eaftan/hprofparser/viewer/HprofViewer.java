@@ -28,6 +28,8 @@ import java.util.stream.Collectors;
 /**
  * TODO in java.hprof: java.lang.ThreadLocal[][] is not nested as expected. Is it supposed to be flattened?
  * TODO (continued) also in java.hprof we have array-classes; is it a quirk?
+ *
+ * TODO in idea.hprof: for ArrayList: elementData = <Class<java.lang.Object>[]>
  */
 public class HprofViewer {
 
@@ -203,11 +205,18 @@ public class HprofViewer {
     }
 
     public static class HeapDumpClassInstance extends HeapDumpObject {
+        private final String className;
         private final List<HeapDumpClassInstanceField> instanceFields;
 
-        public HeapDumpClassInstance(long id, List<HeapDumpClassInstanceField> instanceFields) {
+        public HeapDumpClassInstance(long id, String className,
+                                     List<HeapDumpClassInstanceField> instanceFields) {
             super(id);
+            this.className = className;
             this.instanceFields = instanceFields;
+        }
+
+        public String getClassName() {
+            return className;
         }
 
         public List<HeapDumpClassInstanceField> getInstanceFields() {
@@ -411,11 +420,14 @@ public class HprofViewer {
 
     private HeapDumpClassInstance readHeapDumpClassInstance(long instanceId) {
         List<HeapDumpClassInstanceField> instanceFields = new ArrayList<>();
+        String[] className = new String[1];
 
         RecordHandler recordHandler = new NullRecordHandler() {
             @Override
             public void instanceDump(long objId, int stackTraceSerialNum, long classObjId,
                                      Value<?>[] instanceFieldValues) {
+                className[0] = classNamesByClassObjIdMap.get(classObjId);
+
                 List<String> fieldNames = getFieldNames(classObjId);
 
                 for (int i = 0; i < fieldNames.size(); i++) {
@@ -491,7 +503,7 @@ public class HprofViewer {
             throw new RuntimeException(e);
         }
 
-        return new HeapDumpClassInstance(instanceId, instanceFields);
+        return new HeapDumpClassInstance(instanceId, className[0], instanceFields);
     }
 
     private class MainRecordHandler extends NullRecordHandler {

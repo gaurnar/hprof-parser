@@ -6,18 +6,18 @@ import edu.tufts.eaftan.hprofparser.viewer.HprofViewer.HeapDumpClass;
 import edu.tufts.eaftan.hprofparser.viewer.HprofViewer.HeapDumpClassInstance;
 import edu.tufts.eaftan.hprofparser.viewer.HprofViewer.HeapDumpClassInstanceField;
 import edu.tufts.eaftan.hprofparser.viewer.HprofViewer.HeapDumpClassInstanceObjectField;
-import edu.tufts.eaftan.hprofparser.viewer.HprofViewer.HeapDumpClassInstancePrimitiveField;
 import edu.tufts.eaftan.hprofparser.viewer.HprofViewer.HeapDumpClassObject;
 import edu.tufts.eaftan.hprofparser.viewer.HprofViewer.HeapDumpObject;
 import edu.tufts.eaftan.hprofparser.viewer.HprofViewer.HeapDumpObjectArray;
 import edu.tufts.eaftan.hprofparser.viewer.HprofViewer.HeapDumpPrimitiveArray;
 import edu.tufts.eaftan.hprofparser.viewer.HprofViewer.HeapDumpPrimitiveArrayInstance;
 import edu.tufts.eaftan.hprofparser.viewer.HprofViewer.HeapDumpType;
+import edu.tufts.eaftan.hprofparser.viewer.gui.util.NonEditableDefaultTableModel;
+import edu.tufts.eaftan.hprofparser.viewer.gui.util.ObjectViewUtil;
+import java.awt.event.MouseEvent;
 import java.io.File;
 import java.util.List;
-import java.util.Map;
 import java.util.function.BiFunction;
-import java.util.stream.Collectors;
 import javax.swing.JButton;
 import javax.swing.JFileChooser;
 import javax.swing.JFrame;
@@ -27,6 +27,7 @@ import javax.swing.JTable;
 import javax.swing.JTree;
 import javax.swing.SwingUtilities;
 import javax.swing.WindowConstants;
+import javax.swing.event.MouseInputAdapter;
 import javax.swing.event.TreeExpansionEvent;
 import javax.swing.event.TreeWillExpandListener;
 import javax.swing.table.DefaultTableModel;
@@ -46,6 +47,9 @@ public class MainViewerForm extends JFrame {
 
     private DefaultTreeModel dumpTreeModel;
     private HprofViewer viewer;
+
+    private HeapDumpClassInstance selectedClassInstance;
+    private ClassInstanceViewerForm instanceViewerForm;
 
     public MainViewerForm() {
         setTitle("Hprof Viewer");
@@ -98,30 +102,32 @@ public class MainViewerForm extends JFrame {
                 (DefaultMutableTreeNode) e.getNewLeadSelectionPath().getLastPathComponent();
             if (treeNode.getUserObject() instanceof ClassInstanceNodeData) {
                 ClassInstanceNodeData instanceData = (ClassInstanceNodeData) treeNode.getUserObject();
-
-                List<String> fieldNames = instanceData.fieldPreviews.keySet().stream()
-                    .sorted()
-                    .collect(Collectors.toList());
+                List<HeapDumpClassInstanceField> instanceFields = instanceData.viewerInstance.getInstanceFields();
 
                 TableModel model;
 
-                if (fieldNames.isEmpty()) {
-                    model = new NonEditableDefaultTableModel(1, 1);
+                if (instanceFields.isEmpty()) {
+                    model = new NonEditableDefaultTableModel(new Object[] {""}, 1);
                     model.setValueAt("<no visible fields>", 0, 0);
                 } else {
-                    model = new NonEditableDefaultTableModel(fieldNames.size(), 2);
+                    model = new NonEditableDefaultTableModel(new Object[] {"field", "value"},
+                                                             instanceFields.size());
 
-                    for (int i = 0; i < fieldNames.size(); i++) {
-                        String fieldName = fieldNames.get(i);
+                    for (int i = 0; i < instanceFields.size(); i++) {
+                        String fieldName = instanceFields.get(i).getFieldName();
                         model.setValueAt(fieldName, i, 0);
-                        model.setValueAt(instanceData.fieldPreviews.get(fieldName), i, 1);
+                        model.setValueAt(ObjectViewUtil.showFieldValue(instanceFields.get(i)), i, 1);
                     }
                 }
 
                 objectPropertiesTable.setModel(model);
 
+                selectedClassInstance = instanceData.viewerInstance;
+
             } else {
                 clearObjectPropertiesTableAndShowHint();
+
+                selectedClassInstance = null;
 
                 if (treeNode.getUserObject() instanceof LoadMoreInstancesPlaceholder) {
                     LoadMoreInstancesPlaceholder placeholder = (LoadMoreInstancesPlaceholder) treeNode.getUserObject();
@@ -230,7 +236,8 @@ public class MainViewerForm extends JFrame {
                                             return new DefaultMutableTreeNode(String.format(
                                                 "#%d <Class<%s>>", index + 1, classObject.getClassName()));
                                         } else if (heapDumpObject instanceof HeapDumpClassInstance) {
-                                            return createClassInstanceTreeNode((HeapDumpClassInstance) heapDumpObject, index);
+                                            return createClassInstanceTreeNode(
+                                                (HeapDumpClassInstance) heapDumpObject, index, true);
                                         } else if (heapDumpObject instanceof HeapDumpArrayInstance) {
                                             return createArrayTreeNode((HeapDumpArrayInstance) heapDumpObject, index);
                                         } else {
@@ -337,7 +344,7 @@ public class MainViewerForm extends JFrame {
                                 return new DefaultMutableTreeNode(String.format(
                                     "#%d <Class<%s>>", index + 1, classObject.getClassName()));
                             } else if (heapDumpObject instanceof HeapDumpClassInstance) {
-                                return createClassInstanceTreeNode((HeapDumpClassInstance) heapDumpObject, index);
+                                return createClassInstanceTreeNode((HeapDumpClassInstance) heapDumpObject, index, true);
                             } else if (heapDumpObject instanceof HeapDumpArrayInstance) {
                                 return createArrayTreeNode((HeapDumpArrayInstance) heapDumpObject, index);
                             } else {
@@ -351,6 +358,68 @@ public class MainViewerForm extends JFrame {
             @Override
             public void treeWillCollapse(TreeExpansionEvent event) {
                 // TODO free objects?
+            }
+        });
+
+        objectPropertiesTable.addMouseListener(new MouseInputAdapter() {
+            @Override
+            public void mouseClicked(MouseEvent e) {
+                if (e.getClickCount() != 2 || selectedClassInstance == null) {
+                    return;
+                }
+
+                HeapDumpClassInstanceField instanceFieldToView =
+                    selectedClassInstance.getInstanceFields().get(objectPropertiesTable.getSelectedRow());
+
+                if (!(instanceFieldToView instanceof HeapDumpClassInstanceObjectField)) {
+                    return;
+                }
+
+                long objIdToView = ((HeapDumpClassInstanceObjectField) instanceFieldToView).getObjId();
+
+                if (objIdToView == 0) {
+                    return;
+                }
+
+                HeapDumpClassInstance instanceToView = viewer.showClassInstance(objIdToView);
+
+                if (instanceViewerForm == null || !instanceViewerForm.isVisible()) {
+                    instanceViewerForm = new ClassInstanceViewerForm(instanceToView,
+                                                                     viewer::showClassInstance,
+                                                                     MainViewerForm.this);
+                    instanceViewerForm.setVisible(true);
+                } else {
+                    instanceViewerForm.showInstance(instanceToView);
+                    instanceViewerForm.requestFocus();
+                }
+            }
+        });
+
+        dumpTree.addMouseListener(new MouseInputAdapter() {
+            @Override
+            public void mouseClicked(MouseEvent e) {
+                if (e.getClickCount() != 2 || dumpTree.getLastSelectedPathComponent() == null) {
+                    return;
+                }
+
+                DefaultMutableTreeNode selectedNode = (DefaultMutableTreeNode) dumpTree.getLastSelectedPathComponent();
+
+                if (!(selectedNode.getUserObject() instanceof ClassInstanceNodeData)) {
+                    return;
+                }
+
+                ClassInstanceNodeData instanceNodeData = (ClassInstanceNodeData) selectedNode.getUserObject();
+
+                // TODO remove copy paste
+                if (instanceViewerForm == null || !instanceViewerForm.isVisible()) {
+                    instanceViewerForm = new ClassInstanceViewerForm(instanceNodeData.viewerInstance,
+                                                                     viewer::showClassInstance,
+                                                                     MainViewerForm.this);
+                    instanceViewerForm.setVisible(true);
+                } else {
+                    instanceViewerForm.showInstance(instanceNodeData.viewerInstance);
+                    instanceViewerForm.requestFocus();
+                }
             }
         });
     }
@@ -379,19 +448,12 @@ public class MainViewerForm extends JFrame {
         return node;
     }
 
-    private MutableTreeNode createClassInstanceTreeNode(HeapDumpClassInstance instance, int index) {
-        Map<String, String> fieldPreviews = instance.getInstanceFields().stream()
-            .collect(Collectors.toMap(HeapDumpClassInstanceField::getFieldName, field -> {
-                if (field instanceof HeapDumpClassInstancePrimitiveField) {
-                    return ((HeapDumpClassInstancePrimitiveField) field).getValueAsString();
-                } else { // HeapDumpClassInstanceObjectField
-                    return "<" + ((HeapDumpClassInstanceObjectField) field).getTypeName() + ">";
-                }
-            }));
-
-        DefaultMutableTreeNode node = new DefaultMutableTreeNode(new ClassInstanceNodeData(instance.getId(),
-                                                                                           index,
-                                                                                           fieldPreviews));
+    private MutableTreeNode createClassInstanceTreeNode(HeapDumpClassInstance instance,
+                                                        int index,
+                                                        boolean showClassInToString) {
+        DefaultMutableTreeNode node = new DefaultMutableTreeNode(new ClassInstanceNodeData(index,
+                                                                                           instance,
+                                                                                           showClassInToString));
         node.setAllowsChildren(false);
         return node;
     }
@@ -408,7 +470,7 @@ public class MainViewerForm extends JFrame {
                                              List<HeapDumpClassInstance> instances,
                                              DefaultMutableTreeNode typeNode) {
         addLoadableObjectsToNode(offset, instances,
-                                 this::createClassInstanceTreeNode,
+                                 (instance, index) -> createClassInstanceTreeNode(instance, index, false),
                                  typeNode);
     }
 
@@ -438,7 +500,7 @@ public class MainViewerForm extends JFrame {
     }
 
     private void clearObjectPropertiesTableAndShowHint() {
-        TableModel tableModel = new DefaultTableModel(1, 1);
+        TableModel tableModel = new DefaultTableModel(new Object[]{""}, 1);
         tableModel.setValueAt("Select object to view its properties", 0, 0);
         objectPropertiesTable.setModel(tableModel);
     }
@@ -457,20 +519,19 @@ public class MainViewerForm extends JFrame {
     }
 
     private static class ClassInstanceNodeData {
-        final long id;
         final int index;
-        final Map<String, String> fieldPreviews;
+        final HeapDumpClassInstance viewerInstance;
+        final boolean showClassInToString;
 
-        private ClassInstanceNodeData(long id, int index,
-                                      Map<String, String> fieldPreviews) {
-            this.id = id;
+        private ClassInstanceNodeData(int index, HeapDumpClassInstance viewerInstance, boolean showClassInToString) {
             this.index = index;
-            this.fieldPreviews = fieldPreviews;
+            this.viewerInstance = viewerInstance;
+            this.showClassInToString = showClassInToString;
         }
 
         @Override
         public String toString() {
-            return "#" + (index + 1);
+            return String.format("#%d %s", index, showClassInToString ? viewerInstance.getClassName() : "");
         }
     }
 
@@ -504,15 +565,4 @@ public class MainViewerForm extends JFrame {
         }
     }
 
-    private static class NonEditableDefaultTableModel extends DefaultTableModel {
-
-        public NonEditableDefaultTableModel(int rowCount, int columnCount) {
-            super(rowCount, columnCount);
-        }
-
-        @Override
-        public boolean isCellEditable(int row, int column) {
-            return false;
-        }
-    }
 }
