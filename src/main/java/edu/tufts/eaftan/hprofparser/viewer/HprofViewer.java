@@ -18,6 +18,7 @@ import java.io.File;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
@@ -25,7 +26,8 @@ import java.util.Map;
 import java.util.stream.Collectors;
 
 /**
- * TODO no field names on id=33058500736 com/intellij/usages/ShowUsageViewSettings (idea.hprof)
+ * TODO in java.hprof: java.lang.ThreadLocal[][] is not nested as expected. Is it supposed to be flattened?
+ * TODO (continued) also in java.hprof we have array-classes; is it a quirk?
  */
 public class HprofViewer {
 
@@ -243,6 +245,7 @@ public class HprofViewer {
 
     // TODO not needed for viewing; move to RecordHandler
     // TODO move to file storage?
+    // TODO use class map from HprofParser?
     private Map<Long, ClassProcessingInfo> classInfoByClassObjIdMap = new HashMap<>();
     private Map<Long, List<ClassProcessingInfo>> classInfoByNameIdMap = new HashMap<>();
     private Map<Long, List<ClassFieldProcessingInfo>> classFieldInfoByNameIdMap = new HashMap<>();
@@ -251,6 +254,7 @@ public class HprofViewer {
 
     private Map<Long, List<String>> classFieldNamesByClassObjIdMap = new HashMap<>();
     private Map<Long, String> classNamesByClassObjIdMap = new HashMap<>();
+    private Map<Long, Long> parentClassIdByChildIdMap = new HashMap<>();
 
     private final TypeInstancesFileStorage classInstancesStorage = new TypeInstancesFileStorage();
     private final TypeInstancesFileStorage objectArraysInstancesStorage = new TypeInstancesFileStorage();
@@ -312,6 +316,8 @@ public class HprofViewer {
         classInfoByClassObjIdMap = null;
         classInfoByNameIdMap = null;
         classFieldInfoByNameIdMap = null;
+        objectArraysCountByElementClassIdMap = null;
+        primitiveArraysCountByTypeMap = null;
     }
 
     public List<HeapDumpType> listTypes() {
@@ -400,7 +406,7 @@ public class HprofViewer {
     }
 
     public HeapDumpClassInstance showClassInstance(long instanceId) {
-        return readHeapDumpClassInstance(objectInfoStorage.getObjectInfo(instanceId).getDumpFileOffset());
+        return readHeapDumpClassInstance(instanceId);
     }
 
     private HeapDumpClassInstance readHeapDumpClassInstance(long instanceId) {
@@ -410,7 +416,7 @@ public class HprofViewer {
             @Override
             public void instanceDump(long objId, int stackTraceSerialNum, long classObjId,
                                      Value<?>[] instanceFieldValues) {
-                List<String> fieldNames = classFieldNamesByClassObjIdMap.get(classObjId);
+                List<String> fieldNames = getFieldNames(classObjId);
 
                 for (int i = 0; i < fieldNames.size(); i++) {
                     Value value = instanceFieldValues[i];
@@ -460,6 +466,21 @@ public class HprofViewer {
                     instanceFields.add(field);
                 }
             }
+
+            private List<String> getFieldNames(long classObjId) {
+                List<String> fieldNames = new ArrayList<>();
+
+                Long currentClassId = classObjId;
+
+                // traversing class hierarchy
+                while (currentClassId != null) {
+                    fieldNames.addAll(classFieldNamesByClassObjIdMap.getOrDefault(currentClassId,
+                                                                                  Collections.emptyList()));
+                    currentClassId = parentClassIdByChildIdMap.get(currentClassId);
+                }
+
+                return fieldNames;
+            }
         };
 
         long fileOffset = objectInfoStorage.getObjectInfo(instanceId).getDumpFileOffset();
@@ -484,6 +505,8 @@ public class HprofViewer {
             // TODO record size
 
             classInfoByClassObjIdMap.putIfAbsent(classObjId, new ClassProcessingInfo(classObjId));
+
+            parentClassIdByChildIdMap.put(classObjId, superClassObjId);
 
             ClassProcessingInfo classInfo = classInfoByClassObjIdMap.get(classObjId);
 

@@ -28,13 +28,13 @@ public class HprofViewerTest {
         System.out.println(String.format("Loaded dump with %d types in %.2f seconds",
                                          types.size(), (float) (endMillis - startMillis) / 1000));
 
-        List<HeapDumpClassInstance> instances = viewer.listClassInstances(((HeapDumpClass) types.get(0)).getClassId(),
+        List<HeapDumpClassInstance> instances = viewer.listClassInstances(((HeapDumpClass) types.get(1)).getClassId(),
                                                                           0, 10);
 
         HeapDumpClassInstance instance = viewer.showClassInstance(instances.get(0).getId());
 
         System.out.println(String.format("Class %s has instances count: %d\nFirst instance fields: %s",
-                                         types.get(0).getName(), types.get(0).getInstancesCount(),
+                                         types.get(1).getName(), types.get(1).getInstancesCount(),
                                          instance.getInstanceFields()));
     }
 }
