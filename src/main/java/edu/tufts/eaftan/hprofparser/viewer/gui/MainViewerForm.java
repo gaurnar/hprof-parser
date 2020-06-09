@@ -4,8 +4,11 @@ import edu.tufts.eaftan.hprofparser.viewer.HprofViewer;
 import edu.tufts.eaftan.hprofparser.viewer.HprofViewer.HeapDumpArrayInstance;
 import edu.tufts.eaftan.hprofparser.viewer.HprofViewer.HeapDumpClass;
 import edu.tufts.eaftan.hprofparser.viewer.HprofViewer.HeapDumpClassInstance;
+import edu.tufts.eaftan.hprofparser.viewer.HprofViewer.HeapDumpClassInstanceClassInstanceField;
 import edu.tufts.eaftan.hprofparser.viewer.HprofViewer.HeapDumpClassInstanceField;
+import edu.tufts.eaftan.hprofparser.viewer.HprofViewer.HeapDumpClassInstanceObjectArrayField;
 import edu.tufts.eaftan.hprofparser.viewer.HprofViewer.HeapDumpClassInstanceObjectField;
+import edu.tufts.eaftan.hprofparser.viewer.HprofViewer.HeapDumpClassInstancePrimitiveArrayField;
 import edu.tufts.eaftan.hprofparser.viewer.HprofViewer.HeapDumpClassObject;
 import edu.tufts.eaftan.hprofparser.viewer.HprofViewer.HeapDumpObject;
 import edu.tufts.eaftan.hprofparser.viewer.HprofViewer.HeapDumpObjectArray;
@@ -49,7 +52,7 @@ public class MainViewerForm extends JFrame {
     private HprofViewer viewer;
 
     private HeapDumpClassInstance selectedClassInstance;
-    private ClassInstanceViewerForm instanceViewerForm;
+    private ObjectViewerForm objectViewerForm;
 
     public MainViewerForm() {
         setTitle("Hprof Viewer");
@@ -375,22 +378,23 @@ public class MainViewerForm extends JFrame {
                     return;
                 }
 
-                long objIdToView = ((HeapDumpClassInstanceObjectField) instanceFieldToView).getObjId();
+                HeapDumpClassInstanceObjectField instanceObjectField =
+                    (HeapDumpClassInstanceObjectField) instanceFieldToView;
+
+                long objIdToView = instanceObjectField.getObjId();
 
                 if (objIdToView == 0) {
                     return;
                 }
 
-                HeapDumpClassInstance instanceToView = viewer.showClassInstance(objIdToView);
+                ensureObjectViewerIsPresentAndFocused();
 
-                if (instanceViewerForm == null || !instanceViewerForm.isVisible()) {
-                    instanceViewerForm = new ClassInstanceViewerForm(instanceToView,
-                                                                     viewer::showClassInstance,
-                                                                     MainViewerForm.this);
-                    instanceViewerForm.setVisible(true);
-                } else {
-                    instanceViewerForm.showInstance(instanceToView);
-                    instanceViewerForm.requestFocus();
+                if (instanceObjectField instanceof HeapDumpClassInstanceClassInstanceField) {
+                    objectViewerForm.showInstance(viewer.showClassInstance(objIdToView));
+                } else if (instanceObjectField instanceof HeapDumpClassInstanceObjectArrayField) {
+                    objectViewerForm.showObjectArray(objIdToView);
+                } else if (instanceObjectField instanceof HeapDumpClassInstancePrimitiveArrayField) {
+                    objectViewerForm.showPrimitiveArray(objIdToView);
                 }
             }
         });
@@ -408,20 +412,20 @@ public class MainViewerForm extends JFrame {
                     return;
                 }
 
-                ClassInstanceNodeData instanceNodeData = (ClassInstanceNodeData) selectedNode.getUserObject();
+                ensureObjectViewerIsPresentAndFocused();
 
-                // TODO remove copy paste
-                if (instanceViewerForm == null || !instanceViewerForm.isVisible()) {
-                    instanceViewerForm = new ClassInstanceViewerForm(instanceNodeData.viewerInstance,
-                                                                     viewer::showClassInstance,
-                                                                     MainViewerForm.this);
-                    instanceViewerForm.setVisible(true);
-                } else {
-                    instanceViewerForm.showInstance(instanceNodeData.viewerInstance);
-                    instanceViewerForm.requestFocus();
-                }
+                ClassInstanceNodeData instanceNodeData = (ClassInstanceNodeData) selectedNode.getUserObject();
+                objectViewerForm.showInstance(instanceNodeData.viewerInstance);
             }
         });
+    }
+
+    private void ensureObjectViewerIsPresentAndFocused() {
+        if (objectViewerForm == null || !objectViewerForm.isVisible()) {
+            objectViewerForm = new ObjectViewerForm(viewer, MainViewerForm.this);
+            objectViewerForm.setVisible(true);
+        }
+        objectViewerForm.requestFocus();
     }
 
     private void showError(Throwable t, String s) {

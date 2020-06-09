@@ -30,6 +30,8 @@ import java.util.stream.Collectors;
  * TODO (continued) also in java.hprof we have array-classes; is it a quirk?
  *
  * TODO in idea.hprof: for ArrayList: elementData = <Class<java.lang.Object>[]>
+ *
+ * TODO in idea.hprof: for ArrayList #1: open elementData[#1] - NPE
  */
 public class HprofViewer {
 
@@ -151,7 +153,7 @@ public class HprofViewer {
         }
     }
 
-    public static class HeapDumpClassInstanceObjectField extends HeapDumpClassInstanceField {
+    public static abstract class HeapDumpClassInstanceObjectField extends HeapDumpClassInstanceField {
         private final long objId;
         private final String typeName;
 
@@ -176,6 +178,34 @@ public class HprofViewer {
                 ", objId=" + objId +
                 ", typeName='" + typeName + '\'' +
                 '}';
+        }
+    }
+
+    public static class HeapDumpClassInstanceClassInstanceField extends HeapDumpClassInstanceObjectField {
+
+        protected HeapDumpClassInstanceClassInstanceField(String fieldName, long objId, String typeName) {
+            super(fieldName, objId, typeName);
+        }
+    }
+
+    public static class HeapDumpClassInstanceObjectArrayField extends HeapDumpClassInstanceObjectField {
+
+        protected HeapDumpClassInstanceObjectArrayField(String fieldName, long objId, String typeName) {
+            super(fieldName, objId, typeName);
+        }
+    }
+
+    public static class HeapDumpClassInstancePrimitiveArrayField extends HeapDumpClassInstanceObjectField {
+
+        protected HeapDumpClassInstancePrimitiveArrayField(String fieldName, long objId, String typeName) {
+            super(fieldName, objId, typeName);
+        }
+    }
+
+    public static class HeapDumpClassInstanceClassField extends HeapDumpClassInstanceObjectField {
+
+        protected HeapDumpClassInstanceClassField(String fieldName, long objId, String typeName) {
+            super(fieldName, objId, typeName);
         }
     }
 
@@ -439,13 +469,13 @@ public class HprofViewer {
                         long valueObjectId = (long) value.value;
 
                         if (valueObjectId == 0) { // null value
-                            field = new HeapDumpClassInstanceObjectField(fieldNames.get(i),
+                            field = new HeapDumpClassInstanceClassInstanceField(fieldNames.get(i),
                                                                          0,
-                                                                         // TODO get type info from class dump
+                                                                         // TODO get type info from class dump?
                                                                          null);
                         } else if (classNamesByClassObjIdMap.containsKey(valueObjectId)) {
                             String className = classNamesByClassObjIdMap.get(valueObjectId);
-                            field = new HeapDumpClassInstanceObjectField(fieldNames.get(i),
+                            field = new HeapDumpClassInstanceClassField(fieldNames.get(i),
                                                                          valueObjectId,
                                                                          "Class<" + className + ">");
                         } else {
@@ -455,6 +485,9 @@ public class HprofViewer {
 
                             if (objectInfo.getType() == ObjectType.INSTANCE) {
                                 typeName = classNamesByClassObjIdMap.get(objectInfo.getClassId());
+                                field = new HeapDumpClassInstanceClassInstanceField(fieldNames.get(i),
+                                                                                    valueObjectId,
+                                                                                    typeName);
                             } else if (objectInfo.getType() == ObjectType.OBJECT_ARRAY) {
                                 if (classNamesByClassObjIdMap.containsKey(objectInfo.getClassId())) {
                                     // TODO remove copy paste
@@ -463,13 +496,15 @@ public class HprofViewer {
                                 } else {
                                     typeName = classNamesByClassObjIdMap.get(objectInfo.getClassId()) + "[]";
                                 }
+                                field = new HeapDumpClassInstanceObjectArrayField(fieldNames.get(i),
+                                                                                  valueObjectId,
+                                                                                  typeName);
                             } else { // PRIMITIVE_ARRAY
                                 typeName = objectInfo.getPrimitiveType().toString().toLowerCase() + "[]";
+                                field = new HeapDumpClassInstancePrimitiveArrayField(fieldNames.get(i),
+                                                                                    valueObjectId,
+                                                                                    typeName);
                             }
-
-                            field = new HeapDumpClassInstanceObjectField(fieldNames.get(i),
-                                                                         valueObjectId,
-                                                                         typeName);
                         }
                     } else { // all primitive values
                         field = new HeapDumpClassInstancePrimitiveField(fieldNames.get(i), value.value.toString());
