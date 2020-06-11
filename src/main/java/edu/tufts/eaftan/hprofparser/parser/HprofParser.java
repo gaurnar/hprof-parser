@@ -17,7 +17,6 @@
 package edu.tufts.eaftan.hprofparser.parser;
 
 import com.google.common.base.Preconditions;
-
 import edu.tufts.eaftan.hprofparser.handler.RecordHandler;
 import edu.tufts.eaftan.hprofparser.parser.datastructures.AllocSite;
 import edu.tufts.eaftan.hprofparser.parser.datastructures.CPUSample;
@@ -28,15 +27,16 @@ import edu.tufts.eaftan.hprofparser.parser.datastructures.InstanceField;
 import edu.tufts.eaftan.hprofparser.parser.datastructures.Static;
 import edu.tufts.eaftan.hprofparser.parser.datastructures.Type;
 import edu.tufts.eaftan.hprofparser.parser.datastructures.Value;
-
 import java.io.BufferedInputStream;
 import java.io.ByteArrayInputStream;
+import java.io.Closeable;
 import java.io.DataInput;
 import java.io.DataInputStream;
 import java.io.EOFException;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.IOException;
+import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.HashMap;
 
@@ -46,15 +46,60 @@ import java.util.HashMap;
  */
 public class HprofParser {
 
+  public static final ParseOptions DEFAULT_OPTIONS =
+      new ParseOptions(false, false, false);
+
+  public static class ParseOptions {
+    private final boolean skipObjBodies;
+    private final boolean skipObjArrayBodies;
+    private final boolean skipPrimArrayBodies;
+
+    public ParseOptions(boolean skipObjBodies, boolean skipObjArrayBodies, boolean skipPrimArrayBodies) {
+      this.skipObjBodies = skipObjBodies;
+      this.skipObjArrayBodies = skipObjArrayBodies;
+      this.skipPrimArrayBodies = skipPrimArrayBodies;
+    }
+
+    public boolean isSkipObjBodies() {
+      return skipObjBodies;
+    }
+
+    public boolean isSkipObjArrayBodies() {
+      return skipObjArrayBodies;
+    }
+
+    public boolean isSkipPrimArrayBodies() {
+      return skipPrimArrayBodies;
+    }
+  }
+
+  private File file;
+
   private RecordHandler handler;
-  private HashMap<Long, ClassInfo> classMap;
+  private HashMap<Long, ClassInfo> classMap = new HashMap<>();
 
-  public HprofParser(RecordHandler handler) {
+  private long currentFileOffset;
+  private long lastDumpItemStartOffset;
+  private int idSize;
+
+  private boolean parsed = false;
+
+  private int arrayOffset = 0;
+  private int arrayLimit = -1;
+
+  public void parse(File file, RecordHandler handler) throws IOException {
+    parse(file, handler, DEFAULT_OPTIONS);
+  }
+
+  // TODO allow skipping unwanted records all together
+  public void parse(File file, RecordHandler handler, ParseOptions options) throws IOException {
+
+    if (parsed) {
+      throw new RuntimeException("file was already parsed");
+    }
+
+    this.file = file;
     this.handler = handler;
-    classMap = new HashMap<Long, ClassInfo>();
-  } 
-
-  public void parse(File file) throws IOException {
 
     /* The file format looks like this:
      *
@@ -74,35 +119,111 @@ public class HprofParser {
      *   [u1]* - body
      */
 
-    FileInputStream fs = new FileInputStream(file);
-    DataInputStream in = new DataInputStream(new BufferedInputStream(fs));
+    /*
+     * First pass
+     */
+
+    currentFileOffset = 0;
+
+    GlobalPositionTrackingByteBufferDataInput in = new GlobalPositionTrackingByteBufferDataInput();
+    in.start();
 
     // header
     String format = readUntilNull(in);
-    int idSize = in.readInt();
+    idSize = in.readInt();
     long startTime = in.readLong();
     handler.header(format, idSize, startTime);
 
     // records
     boolean done;
     do {
-      done = parseRecord(in, idSize, true);
+      done = parseRecord(in, true, options);
     } while (!done);
     in.close();
 
-    FileInputStream fsSecond = new FileInputStream(file);
-    DataInputStream inSecond = new DataInputStream(new BufferedInputStream(fsSecond));
+    /*
+     * Second pass
+     */
+
+    currentFileOffset = 0;
+
+    GlobalPositionTrackingByteBufferDataInput inSecond = new GlobalPositionTrackingByteBufferDataInput();
+    inSecond.start();
+
     readUntilNull(inSecond); // format
     inSecond.readInt(); // idSize
     inSecond.readLong(); // startTime
     do {
-      done = parseRecord(inSecond, idSize, false);
+      done = parseRecord(inSecond, false, options);
     } while (!done);
     inSecond.close();
     handler.finished();
+
+    parsed = true;
   }
 
-  public static String readUntilNull(DataInput in) throws IOException {
+  public void readInstanceDumpAtOffset(long offset, RecordHandler handler)
+      throws IOException {
+    checkFileWasParsed();
+
+    this.handler = handler;
+
+    try(FileInputStream fs = new FileInputStream(file)) {
+      fs.getChannel().position(offset);
+
+      DataInputStream in = new DataInputStream(new BufferedInputStream(fs));
+
+      processInstanceDump(in,false, DEFAULT_OPTIONS);
+    }
+  }
+
+  public void readObjArrayDumpAtOffset(long fileOffset, RecordHandler handler, int elementsOffset, int elementsLimit)
+      throws IOException {
+    // TODO remove copy paste with above?
+
+    checkFileWasParsed();
+
+    this.handler = handler;
+
+    this.arrayOffset = elementsOffset;
+    this.arrayLimit = elementsLimit;
+
+    try(FileInputStream fs = new FileInputStream(file)) {
+      fs.getChannel().position(fileOffset);
+
+      DataInputStream in = new DataInputStream(new BufferedInputStream(fs));
+
+      processObjectArrayDump(in,true, DEFAULT_OPTIONS);
+    }
+  }
+
+  public void readPrimArrayDumpAtOffset(long offset, RecordHandler handler, int elementsOffset, int elementsLimit)
+      throws IOException {
+    // TODO remove copy paste with above?
+
+    checkFileWasParsed();
+
+    this.handler = handler;
+
+    this.arrayOffset = elementsOffset;
+    this.arrayLimit = elementsLimit;
+
+    try(FileInputStream fs = new FileInputStream(file)) {
+      fs.getChannel().position(offset);
+
+      DataInputStream in = new DataInputStream(new BufferedInputStream(fs));
+
+      processPrimArrayDump(in,true, DEFAULT_OPTIONS);
+    }
+  }
+
+  private void checkFileWasParsed() {
+    if (!parsed) {
+      throw new RuntimeException("file must be parsed first!");
+    }
+  }
+
+  private String readUntilNull(DataInput in) throws IOException {
 
     int bytesRead = 0;
     byte[] bytes = new byte[25];
@@ -123,7 +244,7 @@ public class HprofParser {
   /**
    * @return true if there are no more records to parse
    */
-  private boolean parseRecord(DataInput in, int idSize, boolean isFirstPass) throws IOException {
+  private boolean parseRecord(DataInput in, boolean isFirstPass, ParseOptions options) throws IOException {
 
     /* format:
      *   u1 - tag
@@ -155,21 +276,28 @@ public class HprofParser {
     switch (tag) {
       case 0x1:
         // String in UTF-8
-        l1 = readId(idSize, in);
+        l1 = readId(in);
         bytesLeft -= idSize;
-        bArr1 = new byte[(int) bytesLeft];
-        in.readFully(bArr1);
+
         if (isFirstPass) {
+          in.skipBytes((int) bytesLeft);
+        } else {
+          // handling strings only on second pass is useful for handling only
+          // strings that we are interested in (e.g. class and field names)
+          bArr1 = new byte[(int) bytesLeft];
+          in.readFully(bArr1);
+
           handler.stringInUTF8(l1, new String(bArr1));
         }
+
         break;
 
       case 0x2:
         // Load class
         i1 = in.readInt();
-        l1 = readId(idSize, in);
+        l1 = readId(in);
         i2 = in.readInt();
-        l2 = readId(idSize, in);
+        l2 = readId(in);
         if (isFirstPass) {
           handler.loadClass(i1, l1, i2, l2);
         }
@@ -185,10 +313,10 @@ public class HprofParser {
 
       case 0x4:
         // Stack frame
-        l1 = readId(idSize, in);
-        l2 = readId(idSize, in);
-        l3 = readId(idSize, in);
-        l4 = readId(idSize, in);
+        l1 = readId(in);
+        l2 = readId(in);
+        l3 = readId(in);
+        l4 = readId(in);
         i1 = in.readInt();
         i2 = in.readInt();
         if (isFirstPass) {
@@ -204,7 +332,7 @@ public class HprofParser {
         bytesLeft -= 12;
         lArr1 = new long[(int) bytesLeft/idSize];
         for (int i=0; i<lArr1.length; i++) {
-          lArr1[i] = readId(idSize, in);
+          lArr1[i] = readId(in);
         }
         if (isFirstPass) {
           handler.stackTrace(i1, i2, i3, lArr1);
@@ -252,11 +380,11 @@ public class HprofParser {
       case 0xa:
         // Start thread
         i1 = in.readInt();
-        l1 = readId(idSize, in);
+        l1 = readId(in);
         i2 = in.readInt();
-        l2 = readId(idSize, in);
-        l3 = readId(idSize, in);
-        l4 = readId(idSize, in);
+        l2 = readId(in);
+        l3 = readId(in);
+        l4 = readId(in);
         if (isFirstPass) {
           handler.startThread(i1, l1, i2, l2, l3, l4);
         }
@@ -276,7 +404,7 @@ public class HprofParser {
           handler.heapDump();
         }
         while (bytesLeft > 0) {
-          bytesLeft -= parseHeapDump(in, idSize, isFirstPass);
+          bytesLeft -= parseHeapDump(in, isFirstPass, options);
         }
         if (!isFirstPass) {
           handler.heapDumpEnd();
@@ -289,7 +417,7 @@ public class HprofParser {
           handler.heapDumpSegment();
         }
         while (bytesLeft > 0) {
-          bytesLeft -= parseHeapDump(in, idSize, isFirstPass);
+          bytesLeft -= parseHeapDump(in, isFirstPass, options);
         }
         break;
 
@@ -333,7 +461,7 @@ public class HprofParser {
   }
 
   // returns number of bytes parsed
-  private int parseHeapDump(DataInput in, int idSize, boolean isFirstPass) throws IOException {
+  private int parseHeapDump(DataInput in, boolean isFirstPass, ParseOptions options) throws IOException {
 
     byte tag = in.readByte();
     int bytesRead = 1;
@@ -345,11 +473,13 @@ public class HprofParser {
     byte[] bArr1;
     long [] lArr1;
 
+    lastDumpItemStartOffset = currentFileOffset;
+
     switch (tag) {
 
       case -1:    // 0xFF
         // Root unknown
-        l1 = readId(idSize, in);
+        l1 = readId(in);
         if (isFirstPass) {
           handler.rootUnknown(l1);
         }
@@ -358,8 +488,8 @@ public class HprofParser {
 
       case 0x01:
         // Root JNI global
-        l1 = readId(idSize, in);
-        l2 = readId(idSize, in);
+        l1 = readId(in);
+        l2 = readId(in);
         if (isFirstPass) {
           handler.rootJNIGlobal(l1, l2);
         }
@@ -368,7 +498,7 @@ public class HprofParser {
 
       case 0x02:
         // Root JNI local
-        l1 = readId(idSize, in);
+        l1 = readId(in);
         i1 = in.readInt();
         i2 = in.readInt();
         if (isFirstPass) {
@@ -379,7 +509,7 @@ public class HprofParser {
 
       case 0x03:
         // Root Java frame
-        l1 = readId(idSize, in);
+        l1 = readId(in);
         i1 = in.readInt();
         i2 = in.readInt();
         if (isFirstPass) {
@@ -390,7 +520,7 @@ public class HprofParser {
 
       case 0x04:
         // Root native stack
-        l1 = readId(idSize, in);
+        l1 = readId(in);
         i1 = in.readInt();
         if (isFirstPass) {
           handler.rootNativeStack(l1, i1);
@@ -400,7 +530,7 @@ public class HprofParser {
 
       case 0x05:
         // Root sticky class
-        l1 = readId(idSize, in);
+        l1 = readId(in);
         if (isFirstPass) {
           handler.rootStickyClass(l1);
         }
@@ -409,7 +539,7 @@ public class HprofParser {
 
       case 0x06:
         // Root thread block
-        l1 = readId(idSize, in);
+        l1 = readId(in);
         i1 = in.readInt();
         if (isFirstPass) {
           handler.rootThreadBlock(l1, i1);
@@ -419,7 +549,7 @@ public class HprofParser {
         
       case 0x07:
         // Root monitor used
-        l1 = readId(idSize, in);
+        l1 = readId(in);
         if (isFirstPass) {
           handler.rootMonitorUsed(l1);
         }
@@ -428,7 +558,7 @@ public class HprofParser {
 
       case 0x08:
         // Root thread object
-        l1 = readId(idSize, in);
+        l1 = readId(in);
         i1 = in.readInt();
         i2 = in.readInt();
         if (isFirstPass) {
@@ -439,14 +569,14 @@ public class HprofParser {
 
       case 0x20:
         // Class dump
-        l1 = readId(idSize, in);
+        l1 = readId(in);
         i1 = in.readInt();
-        l2 = readId(idSize, in);
-        l3 = readId(idSize, in);
-        l4 = readId(idSize, in);
-        l5 = readId(idSize, in);
-        l6 = readId(idSize, in);
-        l7 = readId(idSize, in);
+        l2 = readId(in);
+        l3 = readId(in);
+        l4 = readId(in);
+        l5 = readId(in);
+        l6 = readId(in);
+        l7 = readId(in);
         i2 = in.readInt();
         bytesRead += idSize * 7 + 8;
         
@@ -464,7 +594,7 @@ public class HprofParser {
 
           switch (type) {
             case OBJ:
-              long vid = readId(idSize, in);
+              long vid = readId(in);
               bytesRead += idSize;
               v = new Value<>(type, vid);
               break;
@@ -519,7 +649,7 @@ public class HprofParser {
         Preconditions.checkState(s2 >= 0);
         Static[] statics = new Static[s2];
         for (int i=0; i<s2; i++) {
-          long staticFieldNameStringId = readId(idSize, in);
+          long staticFieldNameStringId = readId(in);
           byte btype = in.readByte();
           bytesRead += idSize + 1;
           Type type = Type.hprofTypeToEnum(btype);
@@ -527,7 +657,7 @@ public class HprofParser {
 
           switch (type) {
             case OBJ:     // object
-              long vid = readId(idSize, in);
+              long vid = readId(in);
               bytesRead += idSize;
               v = new Value<>(type, vid);
               break;
@@ -582,7 +712,7 @@ public class HprofParser {
         Preconditions.checkState(s3 >= 0);
         InstanceField[] instanceFields = new InstanceField[s3];
         for (int i=0; i<s3; i++) {
-          long fieldNameStringId = readId(idSize, in);
+          long fieldNameStringId = readId(in);
           byte btype = in.readByte();
           bytesRead += idSize + 1;
           Type type = Type.hprofTypeToEnum(btype);
@@ -606,107 +736,17 @@ public class HprofParser {
 
       case 0x21:
         // Instance dump
-        l1 = readId(idSize, in);
-        i1 = in.readInt();
-        l2 = readId(idSize, in);    // class obj id
-        i2 = in.readInt();    // num of bytes that follow
-        Preconditions.checkState(i2 >= 0);
-        bArr1 = new byte[i2];
-        in.readFully(bArr1);
-        
-        /** 
-         * because class dump records come *after* instance dump records,
-         * we don't know how to interpret the values yet.  we have to
-         * record the instances and process them at the end.
-         */
-        if (!isFirstPass) {
-          processInstance(new Instance(l1, i1, l2, bArr1), idSize);
-        }
-
-        bytesRead += idSize * 2 + 8 + i2;
+        bytesRead += processInstanceDump(in, isFirstPass, options);
         break;
 
       case 0x22:
         // Object array dump
-        l1 = readId(idSize, in);
-        i1 = in.readInt();    
-        i2 = in.readInt();    // number of elements
-        l2 = readId(idSize, in);
-
-        Preconditions.checkState(i2 >= 0);
-        lArr1 = new long[i2];
-        for (int i=0; i<i2; i++) {
-          lArr1[i] = readId(idSize, in);
-        }
-        if (isFirstPass) {
-          handler.objArrayDump(l1, i1, l2, lArr1);
-        }
-        bytesRead += (2 + i2) * idSize + 8;
+        bytesRead += processObjectArrayDump(in, isFirstPass, options);
         break;
 
       case 0x23:
         // Primitive array dump
-        l1 = readId(idSize, in);
-        i1 = in.readInt();
-        i2 = in.readInt();    // number of elements
-        b1 = in.readByte();
-        bytesRead += idSize + 9;
-
-        Preconditions.checkState(i2 >= 0);
-        Value<?>[] vs = new Value[i2];
-        Type t = Type.hprofTypeToEnum(b1);
-        for (int i=0; i<vs.length; i++) {
-          switch (t) {
-            case OBJ:
-              long vobj = readId(idSize, in);
-              vs[i] = new Value<>(t, vobj);
-              bytesRead += idSize;
-              break;
-            case BOOL:
-              boolean vbool = in.readBoolean();
-              vs[i] = new Value<>(t, vbool);
-              bytesRead += 1;
-              break;
-            case CHAR:
-              char vc = in.readChar();
-              vs[i] = new Value<>(t, vc);
-              bytesRead += 2;
-              break;
-            case FLOAT:
-              float vf = in.readFloat();
-              vs[i] = new Value<>(t, vf);
-              bytesRead += 4;
-              break;
-            case DOUBLE:
-              double vd = in.readDouble();
-              vs[i] = new Value<>(t, vd);
-              bytesRead += 8;
-              break;
-            case BYTE:
-              byte vbyte = in.readByte();
-              vs[i] = new Value<>(t, vbyte);
-              bytesRead += 1;
-              break;
-            case SHORT:
-              short vshort = in.readShort();
-              vs[i] = new Value<>(t, vshort);
-              bytesRead += 2;
-              break;
-            case INT:
-              int vi = in.readInt();
-              vs[i] = new Value<>(t, vi);
-              bytesRead += 4;
-              break;
-            case LONG:
-              long vlong = in.readLong();
-              vs[i] = new Value<>(t, vlong);
-              bytesRead += 8;
-              break;
-          }
-        } 
-        if (isFirstPass) {
-          handler.primArrayDump(l1, i1, b1, vs);
-        }
+        bytesRead += processPrimArrayDump(in, isFirstPass, options);
         break;
 
       default:
@@ -717,7 +757,229 @@ public class HprofParser {
     
   }
 
-  private void processInstance(Instance i, int idSize) throws IOException {
+  private int processPrimArrayDump(DataInput in, boolean isFirstPass, ParseOptions options)
+      throws IOException {
+    long l1;
+    int i1;
+    int i2;
+    byte b1;
+
+    int bytesRead = 0;
+
+    l1 = readId(in);
+    i1 = in.readInt();
+    i2 = in.readInt();    // number of elements
+    b1 = in.readByte();
+    bytesRead += idSize + 9;
+
+    Preconditions.checkState(i2 >= 0);
+
+    Type t = Type.hprofTypeToEnum(b1);
+
+    int elementSize;
+
+    switch (t) {
+      case OBJ:
+        elementSize = idSize;
+        break;
+      case BOOL:
+        elementSize = 1;
+        break;
+      case CHAR:
+        elementSize = 2;
+        break;
+      case FLOAT:
+        elementSize = 4;
+        break;
+      case DOUBLE:
+        elementSize = 8;
+        break;
+      case BYTE:
+        elementSize = 1;
+        break;
+      case SHORT:
+        elementSize = 2;
+        break;
+      case INT:
+        elementSize = 4;
+        break;
+      case LONG:
+        elementSize = 8;
+        break;
+      default:
+        throw new RuntimeException("unexpected element type");
+    }
+
+    int arrayElementsSize = i2 * elementSize;
+
+    bytesRead += arrayElementsSize;
+
+    if (!isFirstPass) {
+      in.skipBytes(arrayElementsSize);
+      return bytesRead;
+    }
+
+    if (options.isSkipObjArrayBodies()) {
+      handler.primArrayDumpAtOffset(l1, i1, b1, lastDumpItemStartOffset);
+
+      // TODO remove copy-paste?
+      in.skipBytes(arrayElementsSize);
+      return bytesRead;
+    }
+
+    if (arrayLimit == -1) {
+      arrayLimit = i2;
+    }
+
+    if (arrayOffset >= i2) {
+      handler.primArrayDump(l1, i1, b1, new Value[0]);
+    } else {
+      int elemsToRead = Math.min(i2 - arrayOffset, arrayLimit);
+
+      in.skipBytes(arrayOffset * idSize);
+
+      Value<?>[] vs = new Value[elemsToRead];
+
+      for (int i=0; i<vs.length; i++) {
+        switch (t) {
+          case OBJ:
+            long vobj = readId(in);
+            vs[i] = new Value<>(t, vobj);
+            break;
+          case BOOL:
+            boolean vbool = in.readBoolean();
+            vs[i] = new Value<>(t, vbool);
+            break;
+          case CHAR:
+            char vc = in.readChar();
+            vs[i] = new Value<>(t, vc);
+            break;
+          case FLOAT:
+            float vf = in.readFloat();
+            vs[i] = new Value<>(t, vf);
+            break;
+          case DOUBLE:
+            double vd = in.readDouble();
+            vs[i] = new Value<>(t, vd);
+            break;
+          case BYTE:
+            byte vbyte = in.readByte();
+            vs[i] = new Value<>(t, vbyte);
+            break;
+          case SHORT:
+            short vshort = in.readShort();
+            vs[i] = new Value<>(t, vshort);
+            break;
+          case INT:
+            int vi = in.readInt();
+            vs[i] = new Value<>(t, vi);
+            break;
+          case LONG:
+            long vlong = in.readLong();
+            vs[i] = new Value<>(t, vlong);
+            break;
+        }
+      }
+
+      handler.primArrayDump(l1, i1, b1, vs);
+    }
+
+    return bytesRead;
+  }
+
+  private int processObjectArrayDump(DataInput in, boolean isFirstPass, ParseOptions options)
+      throws IOException {
+    long l1;
+    int i1;
+    int i2;
+    long l2;
+    long[] lArr1;
+
+    l1 = readId(in);
+    i1 = in.readInt();
+    i2 = in.readInt();    // number of elements
+    l2 = readId(in);
+
+    Preconditions.checkState(i2 >= 0);
+
+    int bytesRead = (2 + i2) * idSize + 8;
+
+    if (!isFirstPass) {
+      in.skipBytes(i2 * idSize);
+      return bytesRead;
+    }
+
+    if (options.isSkipObjArrayBodies()) {
+      handler.objArrayDumpAtOffset(l1, i1, l2, lastDumpItemStartOffset);
+
+      // TODO remove copy-paste?
+      in.skipBytes(i2 * idSize);
+      return bytesRead;
+    }
+
+    if (arrayLimit == -1) {
+      arrayLimit = i2;
+    }
+
+    if (arrayOffset >= i2) {
+      handler.objArrayDump(l1, i1, l2, new long[0]);
+    } else {
+      int elemsToRead = Math.min(i2 - arrayOffset, arrayLimit);
+
+      in.skipBytes(arrayOffset * idSize);
+
+      lArr1 = new long[elemsToRead];
+      for (int i = 0; i < elemsToRead; i++) {
+        lArr1[i] = readId(in);
+      }
+
+      handler.objArrayDump(l1, i1, l2, lArr1);
+    }
+
+    return bytesRead;
+  }
+
+  private int processInstanceDump(DataInput in, boolean isFirstPass, ParseOptions options)
+      throws IOException {
+    long l1;
+    int i1;
+    long l2;
+    int i2;
+    byte[] bArr1;
+
+    l1 = readId(in);
+    i1 = in.readInt();
+    l2 = readId(in);    // class obj id
+    i2 = in.readInt();    // num of bytes that follow
+
+    Preconditions.checkState(i2 >= 0);
+
+    int bytesRead = idSize * 2 + 8 + i2;
+
+    if (options.isSkipObjBodies()) {
+      if (isFirstPass) {
+        handler.instanceDumpAtOffset(l1, i1, l2, lastDumpItemStartOffset);
+      }
+      in.skipBytes(i2);
+      return bytesRead;
+    }
+
+    bArr1 = new byte[i2];
+    in.readFully(bArr1);
+
+    /*
+     * because class dump records come *after* instance dump records,
+     * we don't know how to interpret the values yet.  we have to
+     * record the instances and process them at the end.
+     */
+    if (!isFirstPass) {
+      processInstance(new Instance(l1, i1, l2, bArr1));
+    }
+
+    return bytesRead;
+  }
+
+  private void processInstance(Instance i) throws IOException {
     ByteArrayInputStream bs = new ByteArrayInputStream(i.packedValues);
     DataInputStream input = new DataInputStream(bs);
 
@@ -732,7 +994,7 @@ public class HprofParser {
         Value<?> v = null;
         switch (field.type) {
           case OBJ:     // object
-            long vid = readId(idSize, input);
+            long vid = readId(input);
             v = new Value<>(field.type, vid);
             break;
           case BOOL:     // boolean
@@ -773,10 +1035,11 @@ public class HprofParser {
     }
     Value<?>[] valuesArr = new Value[values.size()];
     valuesArr = values.toArray(valuesArr);
+
     handler.instanceDump(i.objId, i.stackTraceSerialNum, i.classObjId, valuesArr);
   }
 
-  private static long readId(int idSize, DataInput in) throws IOException {
+  private long readId(DataInput in) throws IOException {
     long id = -1;
     if (idSize == 4) {
       id = in.readInt();
@@ -790,22 +1053,221 @@ public class HprofParser {
     return id;
   }
 
- 
-  /* Utility */
+  private class GlobalPositionTrackingByteBufferDataInput implements DataInput, Closeable {
 
-  private int mySkipBytes(int n, DataInput in) throws IOException {
-    int bytesRead = 0;
-    
-    try {
-      while (bytesRead < n) {
-        in.readByte();
-        bytesRead++;
-      }
-    } catch (EOFException e) {
-      // expected
+    // TODO calibrate size even more?
+    private static final int BUFFER_SIZE = 1024 * 1024; // 1 Mb
+
+    private final FileInputStream fileInputStream;
+    private final ByteBuffer buffer;
+
+    private GlobalPositionTrackingByteBufferDataInput() throws IOException {
+      fileInputStream = new FileInputStream(file);
+      buffer = ByteBuffer.allocateDirect(BUFFER_SIZE);
     }
-    
-    return bytesRead;
+
+    public void start() throws IOException {
+      fillWholeBuffer();
+    }
+
+    @Override
+    public void readFully(byte[] b) throws IOException {
+      readFully(b, 0, b.length);
+    }
+
+    @Override
+    public void readFully(byte[] b, int off, int len) throws IOException {
+      int remainingBytes = len;
+      int currentOffset = off;
+
+      //
+      // reading what remains in buffer
+      //
+
+      int bufferRemainingBytesToRead = Math.min(buffer.remaining(), len);
+
+      buffer.get(b, currentOffset, bufferRemainingBytesToRead);
+
+      remainingBytes -= bufferRemainingBytesToRead;
+      currentOffset += bufferRemainingBytesToRead;
+
+      //
+      // reading whole buffers
+      //
+
+      while (remainingBytes != 0) {
+        int bytesToRead = Math.min(remainingBytes, BUFFER_SIZE);
+
+        buffer.rewind();
+
+        int bytesRead = fileInputStream.getChannel().read(buffer);
+
+        if (bytesRead < bytesToRead) {
+          throw new RuntimeException("unexpected end of file");
+        }
+
+        buffer.rewind();
+
+        buffer.get(b, currentOffset, bytesToRead);
+
+        remainingBytes -= bytesToRead;
+        currentOffset += bytesToRead;
+      }
+
+      currentFileOffset += len;
+    }
+
+    @Override
+    public int skipBytes(int n) throws IOException {
+
+      if (n <= buffer.remaining()) {
+        buffer.position(buffer.position() + n);
+      } else {
+        int remainingBytes = n - buffer.remaining();
+
+        long currentChannelPosition = fileInputStream.getChannel().position();
+        fileInputStream.getChannel().position(currentChannelPosition + remainingBytes);
+
+        fillWholeBuffer();
+      }
+
+      // not really correct; in original interface we may skip fewer bytes (but we don't care here)
+      currentFileOffset += n;
+      return n;
+    }
+
+    @Override
+    public boolean readBoolean() throws IOException {
+      ensureBufferHasRemaining(1);
+      byte value = buffer.get();
+      currentFileOffset += 1;
+      return value != 0;
+    }
+
+    @Override
+    public byte readByte() throws IOException {
+      ensureBufferHasRemaining(1);
+      byte value = buffer.get();
+      currentFileOffset += 1;
+      return value;
+    }
+
+    @Override
+    public int readUnsignedByte() {
+      throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public short readShort() throws IOException {
+      ensureBufferHasRemaining(2);
+      short value = buffer.getShort();
+      currentFileOffset += 2;
+      return value;
+    }
+
+    @Override
+    public int readUnsignedShort() {
+      throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public char readChar() throws IOException {
+      ensureBufferHasRemaining(2);
+      char value = buffer.getChar();
+      currentFileOffset += 2;
+      return value;
+    }
+
+    @Override
+    public int readInt() throws IOException {
+      ensureBufferHasRemaining(4);
+      int value = buffer.getInt();
+      currentFileOffset += 4;
+      return value;
+    }
+
+    @Override
+    public long readLong() throws IOException {
+      ensureBufferHasRemaining(8);
+      long value = buffer.getLong();
+      currentFileOffset += 8;
+      return value;
+    }
+
+    @Override
+    public float readFloat() throws IOException {
+      ensureBufferHasRemaining(4);
+      float value = buffer.getFloat();
+      currentFileOffset += 4;
+      return value;
+    }
+
+    @Override
+    public double readDouble() throws IOException {
+      ensureBufferHasRemaining(8);
+      double value = buffer.getDouble();
+      currentFileOffset += 8;
+      return value;
+    }
+
+    @Override
+    public String readLine() {
+      throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public String readUTF() {
+      throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public void close() throws IOException {
+      fileInputStream.close();
+    }
+
+    private void fillWholeBuffer() throws IOException {
+      buffer.rewind();
+
+      int bytesRead = fileInputStream.getChannel().read(buffer);
+
+      buffer.rewind();
+      buffer.limit(Math.max(0, bytesRead));
+    }
+
+    private void ensureBufferHasRemaining(int requestedSize) throws IOException {
+      if (buffer.remaining() >= requestedSize) {
+        return;
+      }
+
+      int bytesNotProcessed = buffer.remaining();
+
+      if (BUFFER_SIZE - bytesNotProcessed < requestedSize) {
+        throw new RuntimeException("requested size is too big"); // should not happen
+      }
+
+      if (bytesNotProcessed != 0) {
+        byte[] notProcessedBytes = new byte[bytesNotProcessed];
+        buffer.get(notProcessedBytes);
+
+        buffer.rewind();
+        buffer.put(notProcessedBytes);
+      } else {
+        buffer.rewind();
+      }
+
+      int bytesRead = fileInputStream.getChannel().read(buffer);
+
+      checkForEOF(bytesRead);
+
+      buffer.rewind();
+      buffer.limit(bytesNotProcessed + bytesRead);
+    }
+
+    private void checkForEOF(int bytesRead) throws EOFException {
+      if (bytesRead == -1) {
+        throw new EOFException();
+      }
+    }
   }
 
 

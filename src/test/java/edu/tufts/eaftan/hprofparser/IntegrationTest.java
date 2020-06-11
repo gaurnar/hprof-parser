@@ -18,14 +18,14 @@ package edu.tufts.eaftan.hprofparser;
 
 import static org.hamcrest.core.StringContains.containsString;
 
-import org.junit.Assert;
-import org.junit.Before;
-import org.junit.Test;
-
 import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.PrintStream;
 import java.net.URISyntaxException;
+import org.junit.Assert;
+import org.junit.Before;
+import org.junit.Ignore;
+import org.junit.Test;
 
 /**
  * End-to-end test of the parser.
@@ -46,6 +46,7 @@ public class IntegrationTest {
   }
 
   @Test
+  @Ignore // TODO
   public void basicUsage() throws Exception {
     String[] args = {getAbsolutePathForResource("java.hprof")};
     Parse.main(args);
@@ -54,6 +55,7 @@ public class IntegrationTest {
   }
   
   @Test
+  @Ignore // TODO
   public void commandLineHandler() throws Exception {
     String[] args = {"--handler=edu.tufts.eaftan.hprofparser.handler.examples.StaticPrintHandler", 
         getAbsolutePathForResource("java.hprof")};

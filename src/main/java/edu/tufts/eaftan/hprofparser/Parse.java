@@ -33,12 +33,9 @@
 package edu.tufts.eaftan.hprofparser;
 
 import com.google.common.collect.Lists;
-
-import edu.tufts.eaftan.hprofparser.handler.examples.PrintHandler;
-
 import edu.tufts.eaftan.hprofparser.handler.RecordHandler;
+import edu.tufts.eaftan.hprofparser.handler.examples.PrintHandler;
 import edu.tufts.eaftan.hprofparser.parser.HprofParser;
-
 import java.io.File;
 import java.io.IOException;
 import java.util.List;
@@ -76,10 +73,10 @@ public class Parse {
       System.err.println("Could not instantiate " + handlerClass);
       System.exit(1);
     }
-    HprofParser parser = new HprofParser(handler);
+    HprofParser parser = new HprofParser();
 
     try {
-      parser.parse(new File(argList.get(argList.size() - 1)));
+      parser.parse(new File(argList.get(argList.size() - 1)), handler);
     } catch (IOException e) {
       System.err.println(e);
     } 

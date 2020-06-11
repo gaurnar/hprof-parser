@@ -134,14 +134,23 @@ public class NullRecordHandler implements RecordHandler {
       long classObjId, Value<?>[] instanceFieldValues) {}
 
   @Override
+  public void instanceDumpAtOffset(long objId, int stackTraceSerialNum, long classObjId, long fileOffset) {}
+
+  @Override
   public void objArrayDump(long objId, int stackTraceSerialNum, 
       long elemClassObjId, long[] elems) {}
+
+  @Override
+  public void objArrayDumpAtOffset(long objId, int stackTraceSerialNum, long elemClassObjId, long fileOffset) {}
 
   @Override
   public void primArrayDump(long objId, int stackTraceSerialNum, 
       byte elemType, Value<?>[] elems) {}
 
-  
+  @Override
+  public void primArrayDumpAtOffset(long objId, int stackTraceSerialNum, byte elemType, long fileOffset) {}
+
+
   /* handler for end of file */
   
   @Override
