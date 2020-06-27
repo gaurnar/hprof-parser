@@ -819,7 +819,7 @@ public class HprofParser {
       return bytesRead;
     }
 
-    if (options.isSkipObjArrayBodies()) {
+    if (options.isSkipPrimArrayBodies()) {
       handler.primArrayDumpAtOffset(l1, i1, b1, lastDumpItemStartOffset);
 
       // TODO remove copy-paste?
@@ -836,7 +836,7 @@ public class HprofParser {
     } else {
       int elemsToRead = Math.min(i2 - arrayOffset, arrayLimit);
 
-      in.skipBytes(arrayOffset * idSize);
+      in.skipBytes(arrayOffset * elementSize);
 
       Value<?>[] vs = new Value[elemsToRead];
 
